@@ -43,6 +43,7 @@ The application architecture follows best practices for AWS deployment including
    - Lambda logging
    - SNS for notifications
 
+
 ## Prerequisites
 
 - AWS CLI configured with appropriate credentials
