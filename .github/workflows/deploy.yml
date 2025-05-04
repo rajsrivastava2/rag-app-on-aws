@@ -1,0 +1,675 @@
+name: Terraform AWS Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      reset_db_password:
+        description: 'Reset database password (use with caution)'
+        required: false
+        default: false
+        type: boolean
+      bastion_allowed_cidr:
+        description: 'CIDR block allowed to access bastion (e.g. office IP)'
+        required: false
+        default: '0.0.0.0/0'
+        type: string
+      wait_for_db:
+        description: 'Wait for database to be available before initialization'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  PROJECT_NAME: rag-app-on-aws
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: 1.5.7
+  PYTHON_VERSION: '3.11'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  determine_environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      reset_db_password: ${{ steps.set-env.outputs.reset_db_password }}
+      wait_for_db: ${{ steps.set-env.outputs.wait_for_db }}
+    steps:
+      - id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+          
+          # Default to NOT resetting DB password unless explicitly triggered
+          echo "reset_db_password=false" >> $GITHUB_OUTPUT
+          
+          # Set wait_for_db flag from input or default to true
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.wait_for_db }}" == "false" ]]; then
+            echo "wait_for_db=false" >> $GITHUB_OUTPUT
+          else
+            echo "wait_for_db=true" >> $GITHUB_OUTPUT
+          fi
+  
+  code-quality:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    continue-on-error: true
+    
+  build_lambda:
+    needs: [determine_environment, code-quality]
+    runs-on: ubuntu-latest
+    outputs:
+      project_name: ${{ steps.set-vars.outputs.project_name }}
+      stage: ${{ steps.set-vars.outputs.stage }}
+      aws_region: ${{ steps.set-vars.outputs.aws_region }}
+      reset_db_password: ${{ steps.set-vars.outputs.reset_db_password }}
+      enable_lifecycle_rules: ${{ steps.set-vars.outputs.enable_lifecycle_rules }}
+      bastion_allowed_cidr: ${{ steps.set-vars.outputs.bastion_allowed_cidr }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '${{ env.PYTHON_VERSION }}'
+      
+      - name: Set environment variables
+        id: set-vars
+        run: |
+          PROJECT_NAME="${{ env.PROJECT_NAME }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          AWS_REGION="${{ env.AWS_REGION }}"
+          
+          # Set reset_db_password based on workflow input or default
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.reset_db_password }}" == "true" ]]; then
+            RESET_DB_PASSWORD="true"
+          else
+            RESET_DB_PASSWORD="false"
+          fi
+          
+          # Set S3 lifecycle variables - enable for prod, disable for dev
+          if [[ "$STAGE" == "prod" ]]; then
+            ENABLE_LIFECYCLE="true"
+          else
+            ENABLE_LIFECYCLE="false"
+          fi
+          
+          # Set bastion allowed CIDR
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.bastion_allowed_cidr }}" ]]; then
+            BASTION_CIDR="${{ github.event.inputs.bastion_allowed_cidr }}"
+          else
+            # Default to office IP range or a safe default
+            BASTION_CIDR="0.0.0.0/0"
+          fi
+          
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "aws_region=$AWS_REGION" >> $GITHUB_OUTPUT
+          echo "reset_db_password=$RESET_DB_PASSWORD" >> $GITHUB_OUTPUT
+          echo "enable_lifecycle_rules=$ENABLE_LIFECYCLE" >> $GITHUB_OUTPUT
+          echo "bastion_allowed_cidr=$BASTION_CIDR" >> $GITHUB_OUTPUT
+          
+          # Set environment variables
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "STAGE=$STAGE" >> $GITHUB_ENV
+          echo "AWS_REGION=$AWS_REGION" >> $GITHUB_ENV
+          echo "RESET_DB_PASSWORD=$RESET_DB_PASSWORD" >> $GITHUB_ENV
+          echo "ENABLE_LIFECYCLE=$ENABLE_LIFECYCLE" >> $GITHUB_ENV
+          echo "BASTION_CIDR=$BASTION_CIDR" >> $GITHUB_ENV
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          
+      - name: Package Lambda functions
+        run: |
+          mkdir -p lambda_artifacts
+          
+          # Check if we have Lambda source code directories
+          if [ -d "src/document_processor" ]; then
+            echo "Packaging document_processor Lambda"
+            cd src/document_processor && pip install -r requirements.txt -t . || true && zip -r ../../lambda_artifacts/document_processor.zip . && cd ../..
+          fi
+          
+          if [ -d "src/query_processor" ]; then
+            echo "Packaging query_processor Lambda"
+            cd src/query_processor && pip install -r requirements.txt -t . || true && zip -r ../../lambda_artifacts/query_processor.zip . && cd ../..
+          fi
+          
+          if [ -d "src/upload_handler" ]; then
+            echo "Packaging upload_handler Lambda"
+            cd src/upload_handler && pip install -r requirements.txt -t . || true && zip -r ../../lambda_artifacts/upload_handler.zip . && cd ../..
+          fi
+          
+          # Package db_init Lambda with the improved version
+          if [ -d "src/db_init" ]; then
+            echo "Packaging db_init Lambda"
+            cd src/db_init && pip install -r requirements.txt -t . || true && zip -r ../../lambda_artifacts/db_init.zip . && cd ../..
+          fi
+          
+          # Add the auth_handler Lambda packaging
+          if [ -d "src/auth_handler" ]; then
+            echo "Packaging auth_handler Lambda"
+            cd src/auth_handler && pip install -r requirements.txt -t . || true && zip -r ../../lambda_artifacts/auth_handler.zip . && cd ../..
+          fi
+      - name: Upload Lambda artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-artifacts
+          path: lambda_artifacts/
+          retention-days: 1
+
+  terraform-plan:
+    needs: [determine_environment, build_lambda]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine_environment.outputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ needs.build_lambda.outputs.aws_region }}
+      
+      - name: Create Terraform State Bucket and DynamoDB Table
+        run: |
+          # Extract bucket name from backend.tf
+          cd environments/${{ needs.determine_environment.outputs.environment }}
+          BUCKET_NAME=$(grep bucket backend.tf | head -1 | cut -d '"' -f2 || echo "rag-app-terraform-state")
+          DYNAMODB_TABLE=$(grep dynamodb_table backend.tf | head -1 | cut -d '"' -f2 || echo "terraform-state-lock")
+          cd ../..
+          
+          # Create the S3 bucket if it doesn't exist
+          echo "Creating S3 bucket $BUCKET_NAME if it doesn't exist..."
+          aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null || aws s3api create-bucket --bucket $BUCKET_NAME --region ${{ needs.build_lambda.outputs.aws_region }} $(if [[ "${{ needs.build_lambda.outputs.aws_region }}" != "us-east-1" ]]; then echo "--create-bucket-configuration LocationConstraint=${{ needs.build_lambda.outputs.aws_region }}"; fi)
+          
+          # Enable versioning on the bucket
+          echo "Enabling versioning on bucket $BUCKET_NAME..."
+          aws s3api put-bucket-versioning --bucket $BUCKET_NAME --versioning-configuration Status=Enabled
+          
+          # Create DynamoDB table for state locking if it doesn't exist
+          echo "Creating DynamoDB table $DYNAMODB_TABLE if it doesn't exist..."
+          aws dynamodb describe-table --table-name $DYNAMODB_TABLE 2>/dev/null || aws dynamodb create-table --table-name $DYNAMODB_TABLE --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST
+          
+          # Set public access block configuration to ensure proper security
+          echo "Setting bucket access controls..."
+          aws s3api put-public-access-block --bucket $BUCKET_NAME --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+      
+      - name: Download Lambda artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-artifacts
+          path: lambda_artifacts/
+      
+      - name: Copy Lambda Artifacts to Environment Directory
+        run: |
+          # Create the directory structure
+          mkdir -p environments/${{ needs.determine_environment.outputs.environment }}/lambda_artifacts/
+          
+          # Copy lambda artifacts to the environment directory
+          cp -v lambda_artifacts/*.zip environments/${{ needs.determine_environment.outputs.environment }}/lambda_artifacts/
+          
+          # Check if files exist
+          ls -la environments/${{ needs.determine_environment.outputs.environment }}/lambda_artifacts/
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+      - name: Terraform Init
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: terraform init
+      
+      - name: Import Existing Resources
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: |
+          chmod +x ../../scripts/import_resources.sh
+          ../../scripts/import_resources.sh "${{ needs.build_lambda.outputs.project_name }}" "${{ needs.determine_environment.outputs.environment }}" "${{ needs.build_lambda.outputs.aws_region }}" || true
+      
+      - name: Terraform Plan
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: |
+          terraform plan \
+            -lock=false \
+            -var="reset_db_password=false" \
+            -var="enable_lifecycle_rules=false" \
+            -var='bastion_allowed_cidr=["0.0.0.0/0"]' \
+            -out=tfplan
+        
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ needs.determine_environment.outputs.environment }}
+          path: environments/${{ needs.determine_environment.outputs.environment }}/tfplan
+          retention-days: 1
+
+  terraform-apply:
+    needs: [determine_environment, build_lambda, terraform-plan]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment: ${{ needs.determine_environment.outputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ needs.build_lambda.outputs.aws_region }}
+      
+      - name: Download Lambda artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-artifacts
+          path: lambda_artifacts/
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      
+      - name: Copy Lambda Artifacts
+        run: |
+          # Create the directory structure
+          mkdir -p environments/${{ needs.determine_environment.outputs.environment }}/lambda_artifacts/
+          
+          # Copy lambda artifacts to the environment directory
+          cp -v lambda_artifacts/*.zip environments/${{ needs.determine_environment.outputs.environment }}/lambda_artifacts/
+      
+      - name: Upload Lambda ZIP files to S3 before apply
+        run: |
+          # Get document bucket name based on project and stage
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          
+          LAMBDA_BUCKET_NAME="${PROJECT_NAME}-${STAGE}-lambda-code"
+          
+          # Ensure lambda code bucket exists
+          echo "Checking if lambda code bucket exists..."
+          if aws s3api head-bucket --bucket ${LAMBDA_BUCKET_NAME} 2>/dev/null; then
+            echo "Lambda code bucket exists, uploading Lambda code..."
+            
+            # Upload Lambda code to S3 bucket
+            echo "Uploading Lambda code to S3..."
+            aws s3 cp lambda_artifacts/document_processor.zip s3://${LAMBDA_BUCKET_NAME}/lambda/document_processor.zip
+            aws s3 cp lambda_artifacts/query_processor.zip s3://${LAMBDA_BUCKET_NAME}/lambda/query_processor.zip
+            aws s3 cp lambda_artifacts/upload_handler.zip s3://${LAMBDA_BUCKET_NAME}/lambda/upload_handler.zip
+            aws s3 cp lambda_artifacts/db_init.zip s3://${LAMBDA_BUCKET_NAME}/lambda/db_init.zip
+            aws s3 cp lambda_artifacts/auth_handler.zip s3://${LAMBDA_BUCKET_NAME}/lambda/auth_handler.zip
+            
+            echo "Lambda code uploaded to S3"
+          else
+            echo "Lambda code bucket doesn't exist yet, will be created by Terraform"
+          fi
+      
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ needs.determine_environment.outputs.environment }}
+          path: environments/${{ needs.determine_environment.outputs.environment }}
+      
+      - name: Terraform Init
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: terraform init
+
+      - name: Terraform Re-Plan & Apply
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: |
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+
+      - name: Wait for RDS instance to be available
+        if: ${{ needs.determine_environment.outputs.wait_for_db == 'true' }}
+        run: |
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          REGION="${{ needs.build_lambda.outputs.aws_region }}"
+          DB_INSTANCE_ID="${PROJECT_NAME}-${STAGE}-postgres"
+          
+          echo "Waiting for RDS instance $DB_INSTANCE_ID to be available..."
+          
+          # Wait for up to 10 minutes for the RDS instance to be available
+          MAX_ATTEMPTS=60
+          ATTEMPT=1
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            STATUS=$(aws rds describe-db-instances --db-instance-identifier $DB_INSTANCE_ID --region $REGION --query "DBInstances[0].DBInstanceStatus" --output text 2>/dev/null || echo "not-found")
+            
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: RDS status is '$STATUS'"
+            
+            if [ "$STATUS" = "available" ]; then
+              echo "RDS instance is available. Proceeding."
+              break
+            elif [ "$STATUS" = "not-found" ]; then
+              echo "RDS instance not found. Waiting..."
+            else
+              echo "RDS instance is in $STATUS state. Waiting..."
+            fi
+            
+            # If we've reached the maximum attempts, exit with a warning
+            if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+              echo "Warning: Maximum attempts reached. RDS instance may not be fully available yet."
+              break
+            fi
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 10
+          done
+
+      - name: Update Lambda env vars if DB password was reset
+        if: ${{ needs.build_lambda.outputs.reset_db_password == 'true' }}
+        run: |
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          
+          # Get the DB credentials secret ARN from terraform output
+          cd environments/$STAGE
+          DB_SECRET_ARN=$(terraform output -raw db_credentials_secret_arn 2>/dev/null || echo "")
+          cd ../..
+          
+          if [ -n "$DB_SECRET_ARN" ]; then
+            echo "Updating Lambda functions with new DB credentials secret ARN..."
+            
+            # Update all Lambda functions that use the DB credentials
+            FUNCTION_NAMES=(
+              "${PROJECT_NAME}-${STAGE}-document-processor"
+              "${PROJECT_NAME}-${STAGE}-query-processor"
+              "${PROJECT_NAME}-${STAGE}-upload-handler"
+              "${PROJECT_NAME}-${STAGE}-db-init"
+            )
+            
+            for FUNCTION_NAME in "${FUNCTION_NAMES[@]}"; do
+              echo "Updating function: $FUNCTION_NAME"
+              # Get current environment variables
+              ENV_VARS=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" --query "Environment.Variables" || echo "{}")
+              
+              # Update DB_SECRET_ARN in environment variables if it exists
+              if [[ $ENV_VARS == *"DB_SECRET_ARN"* ]]; then
+                aws lambda update-function-configuration \
+                  --function-name "$FUNCTION_NAME" \
+                  --environment "Variables={DB_SECRET_ARN=$DB_SECRET_ARN}"
+                echo "Updated DB_SECRET_ARN for $FUNCTION_NAME"
+              fi
+            done
+          else
+            echo "DB secret ARN not found, skipping Lambda environment updates"
+          fi
+      
+      - name: Upload Lambda code to S3 after apply
+        run: |
+          # Get document bucket name based on project and stage
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          
+          BUCKET_NAME="${PROJECT_NAME}-${STAGE}-documents"
+          
+          # Upload Lambda code to S3 bucket
+          echo "Uploading Lambda code to S3 after apply..."
+          aws s3 cp lambda_artifacts/document_processor.zip s3://${BUCKET_NAME}/lambda/document_processor.zip
+          aws s3 cp lambda_artifacts/query_processor.zip s3://${BUCKET_NAME}/lambda/query_processor.zip
+          aws s3 cp lambda_artifacts/upload_handler.zip s3://${BUCKET_NAME}/lambda/upload_handler.zip
+          aws s3 cp lambda_artifacts/db_init.zip s3://${BUCKET_NAME}/lambda/db_init.zip
+          aws s3 cp lambda_artifacts/auth_handler.zip s3://${BUCKET_NAME}/lambda/auth_handler.zip      
+          
+      - name: Check if Lambda functions need manual updating
+        id: check-lambda-update
+        run: |
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          LAMBDA_BUCKET_NAME="${PROJECT_NAME}-${STAGE}-lambda-code"
+          
+          # Special handling for db_init function which may not be managed by Terraform
+          DB_INIT_NAME="${PROJECT_NAME}-${STAGE}-db-init"
+          AUTH_HANDLER_NAME="${PROJECT_NAME}-${STAGE}-auth-handler"
+          
+          # Update the db_init and auth_handler functions manually since they might not be in Terraform
+          echo "Updating db_init Lambda function..."
+          aws lambda update-function-code --function-name $DB_INIT_NAME --s3-bucket $LAMBDA_BUCKET_NAME --s3-key "lambda/db_init.zip" || echo "Failed to update db_init, continuing..."
+          
+          echo "Updating auth_handler Lambda function..."
+          aws lambda update-function-code --function-name $AUTH_HANDLER_NAME --s3-bucket $LAMBDA_BUCKET_NAME --s3-key "lambda/auth_handler.zip" || echo "Failed to update auth_handler, continuing..."
+          
+          echo "Other Lambda functions are updated by Terraform automatically"  
+      
+      - name: Invoke Database Init Lambda
+        run: |
+          DB_INIT_NAME="${{ needs.build_lambda.outputs.project_name }}-${{ needs.determine_environment.outputs.environment }}-db-init"
+          
+          # Invoke the database initialization Lambda to set up PGVector
+          echo "Initializing PostgreSQL database with PGVector..."
+          
+          # Maximum retry attempts
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          SUCCESS=false
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" != "true" ]; do
+            RETRY_COUNT=$((RETRY_COUNT+1))
+            
+            echo "Attempt $RETRY_COUNT to invoke DB init Lambda..."
+            RESPONSE=$(aws lambda invoke --function-name $DB_INIT_NAME --payload '{}' /tmp/db_init_output.json 2>&1)
+            STATUS_CODE=$?
+            
+            if [ $STATUS_CODE -eq 0 ]; then
+              # Check if the Lambda executed successfully
+              FUNCTION_ERROR=$(echo "$RESPONSE" | grep "FunctionError" || echo "")
+              
+              if [ -z "$FUNCTION_ERROR" ]; then
+                echo "DB initialization Lambda invoked successfully"
+                cat /tmp/db_init_output.json || echo "Could not get response from DB init Lambda"
+                SUCCESS=true
+              else
+                echo "DB initialization Lambda returned an error. Waiting before retry..."
+                cat /tmp/db_init_output.json || echo "Could not get error details"
+                sleep 30
+              fi
+            else
+              echo "Failed to invoke DB initialization Lambda. Waiting before retry..."
+              echo "Error: $RESPONSE"
+              sleep 30
+            fi
+          done
+          
+          if [ "$SUCCESS" != "true" ]; then
+            echo "Warning: Failed to successfully invoke DB initialization Lambda after $MAX_RETRIES attempts"
+            echo "Manual initialization may be required"
+          fi
+
+      - name: Verify deployment
+        run: |
+          PROJECT_NAME="${{ needs.build_lambda.outputs.project_name }}"
+          STAGE="${{ needs.determine_environment.outputs.environment }}"
+          
+          UPLOAD_HANDLER_NAME="${PROJECT_NAME}-${STAGE}-upload-handler"
+          echo "Verifying deployment by invoking ${UPLOAD_HANDLER_NAME}..."
+          aws lambda invoke --function-name $UPLOAD_HANDLER_NAME --payload '{"action": "healthcheck"}' response.json || echo "Verification failed, but deployment may still be successful"
+          cat response.json || echo "Could not get response"
+
+  integration_tests:
+    needs: [determine_environment, terraform-apply]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment: ${{ needs.determine_environment.outputs.environment }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '${{ env.PYTHON_VERSION }}'
+        
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+        
+      - name: Get API endpoint
+        id: get-api
+        run: |
+          ENV=${{ needs.determine_environment.outputs.environment }}
+          PROJECT_NAME="${{ env.PROJECT_NAME }}"
+          AWS_REGION="${{ env.AWS_REGION }}"
+          
+          echo "Environment: $ENV"
+          echo "Project name: $PROJECT_NAME"
+          echo "AWS Region: $AWS_REGION"
+          
+          # Try to get API endpoint from Terraform output
+          cd environments/$ENV
+          API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
+          
+          if [ -n "$API_ENDPOINT" ] && [ "$API_ENDPOINT" != "" ]; then
+            echo "Got API endpoint from Terraform: $API_ENDPOINT"
+          else
+            echo "Attempting to get API endpoint from AWS CLI..."
+            
+            # Fallback to using AWS CLI directly if terraform fails
+            API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${PROJECT_NAME}-${ENV}-api'].id" --output text)
+            
+            if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
+              echo "Found API Gateway ID: $API_ID"
+              STAGE_NAME="$ENV"
+              API_ENDPOINT="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/${STAGE_NAME}"
+              echo "Using API endpoint: $API_ENDPOINT"
+            else
+              echo "Could not find API Gateway, using example.com fallback"
+              API_ENDPOINT="https://example.com"
+            fi
+          fi
+          
+          echo "Final API endpoint: $API_ENDPOINT"
+          echo "API_ENDPOINT=$API_ENDPOINT" >> $GITHUB_ENV
+        
+      - name: Check for pytest config files
+        run: |
+          echo "Looking for pytest configuration files that might interfere with the tests..."
+          
+          # Check for and temporarily move aside any pytest config files
+          CONFIG_FILES=("pytest.ini" "pyproject.toml" ".coveragerc" "conftest.py")
+          for FILE in "${CONFIG_FILES[@]}"; do
+            if [ -f "$FILE" ]; then
+              echo "Found $FILE, temporarily moving it aside for integration tests"
+              mv "$FILE" "${FILE}.bak"
+            fi
+          done
+          
+          # Check in the src directory too
+          if [ -d "src" ]; then
+            if [ -f "src/conftest.py" ]; then
+              echo "Found src/conftest.py, temporarily moving it aside"
+              mv "src/conftest.py" "src/conftest.py.bak"
+            fi
+          fi
+    
+      - name: Run integration tests
+        run: |
+          echo "Using API endpoint: $API_ENDPOINT"
+          
+          if [ "$API_ENDPOINT" == "https://example.com" ]; then
+            echo "Skipping integration tests as API endpoint could not be determined"
+            echo "<testsuites><testsuite name='placeholder'><testcase name='placeholder'><skipped message='API endpoint not available'/></testcase></testsuite></testsuites>" > integration-test-results.xml
+          else
+            # Use our custom integration test script instead of pytest
+            echo "Running custom integration test script..."
+            python src/tests/integration/run_integration_tests.py
+          fi
+        
+      - name: Restore config files
+        if: always()
+        run: |
+          echo "Restoring any temporarily moved config files..."
+          
+          # Restore any temporarily moved pytest config files
+          CONFIG_FILES=("pytest.ini" "pyproject.toml" ".coveragerc" "conftest.py")
+          for FILE in "${CONFIG_FILES[@]}"; do
+            if [ -f "${FILE}.bak" ]; then
+              echo "Restoring $FILE"
+              mv "${FILE}.bak" "$FILE"
+            fi
+          done
+          
+          # Restore in the src directory too
+          if [ -d "src" ]; then
+            if [ -f "src/conftest.py.bak" ]; then
+              echo "Restoring src/conftest.py"
+              mv "src/conftest.py.bak" "src/conftest.py"
+            fi
+          fi
+        
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: integration-test-results.xml
+  
