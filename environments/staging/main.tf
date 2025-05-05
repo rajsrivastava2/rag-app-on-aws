@@ -1,4 +1,12 @@
-# root main.tf
+# ============================================================
+# Root Module for RAG Application Deployment in Staging env (main.tf)
+# ============================================================
+# Provisions project-wide infrastructure by composing all modules
+
+# =====================================
+# S3 Bucket to Store Lambda ZIP Artifacts
+# =====================================
+
 resource "aws_s3_bucket" "lambda_code" {
   bucket = "${var.project_name}-${var.stage}-lambda-code"
   
@@ -39,6 +47,10 @@ resource "aws_s3_bucket_versioning" "lambda_code" {
   }
 }
 
+# ====================
+# VPC Networking Module
+# ====================
+
 module "vpc" {
   source = "../../modules/vpc"
   
@@ -59,6 +71,10 @@ module "vpc" {
   bastion_allowed_cidr = var.bastion_allowed_cidr
 }
 
+# =======================
+# Storage (S3 + DynamoDB)
+# =======================
+
 module "storage" {
   source = "../../modules/storage"
   
@@ -70,6 +86,10 @@ module "storage" {
   standard_ia_transition_days = var.standard_ia_transition_days
   glacier_transition_days    = var.glacier_transition_days
 }
+
+# =====================
+# Database (PostgreSQL)
+# =====================
 
 module "database" {
   source = "../../modules/database"
@@ -92,6 +112,48 @@ module "database" {
   depends_on = [module.vpc]
 }
 
+# Add auth module before api and compute modules
+module "auth" {
+  source = "../../modules/auth"
+  
+  project_name = var.project_name
+  stage        = var.stage
+}
+
+# ====================
+# API Gateway Module
+# ====================
+
+module "api" {
+  source = "../../modules/api"
+  
+  project_name            = var.project_name
+  stage                   = var.stage
+  aws_region              = var.aws_region
+  document_processor_arn  = module.compute.document_processor_arn
+  query_processor_arn     = module.compute.query_processor_arn
+  upload_handler_arn      = module.compute.upload_handler_arn
+  query_processor_name    = module.compute.query_processor_name
+  upload_handler_name     = module.compute.upload_handler_name
+  
+  auth_handler_arn  = module.compute.auth_handler_arn 
+  auth_handler_name = module.compute.auth_handler_name
+  
+  # Auth references from auth module
+  cognito_user_pool_id  = module.auth.cognito_user_pool_id
+  cognito_app_client_id = module.auth.cognito_app_client_id
+  cognito_user_pool_arn = module.auth.cognito_user_pool_arn
+  cognito_domain         = module.auth.cognito_domain
+
+  
+  # Make sure compute and auth modules are created first
+  depends_on = [module.compute, module.auth]
+}
+
+# =======================
+# Compute (Lambda System)
+# =======================
+
 module "compute" {
   source = "../../modules/compute"
   
@@ -110,23 +172,18 @@ module "compute" {
   lambda_security_group_id = module.vpc.lambda_security_group_id
   db_secret_arn           = module.database.db_credentials_secret_arn
   
-  depends_on = [module.storage, module.vpc, module.database]
+  # Add Cognito details from auth module
+  cognito_user_pool_id    = module.auth.cognito_user_pool_id
+  cognito_app_client_id   = module.auth.cognito_app_client_id
+  cognito_user_pool_arn   = module.auth.cognito_user_pool_arn
+  
+  depends_on = [module.storage, module.vpc, module.database, module.auth]
 }
 
-module "api" {
-  source = "../../modules/api"
-  
-  project_name            = var.project_name
-  stage                   = var.stage
-  aws_region              = var.aws_region
-  document_processor_arn  = module.compute.document_processor_arn
-  query_processor_arn     = module.compute.query_processor_arn
-  upload_handler_arn      = module.compute.upload_handler_arn
-  query_processor_name    = module.compute.query_processor_name
-  upload_handler_name     = module.compute.upload_handler_name
-  
-  depends_on = [module.compute]
-}
+
+# ===================
+# Monitoring & Alerts
+# ===================
 
 module "monitoring" {
   source = "../../modules/monitoring"
@@ -138,11 +195,15 @@ module "monitoring" {
   document_processor_name   = module.compute.document_processor_name
   query_processor_name      = module.compute.query_processor_name
   upload_handler_name       = module.compute.upload_handler_name
+  auth_handler_name         = module.compute.auth_handler_name
   
   depends_on = [module.compute]
 }
 
+# ===================
 # Outputs
+# ===================
+
 output "api_endpoint" {
   description = "URL of the API endpoint"
   value       = module.api.api_endpoint
@@ -166,4 +227,24 @@ output "vpc_id" {
 output "db_endpoint" {
   description = "Endpoint of the PostgreSQL database"
   value       = module.database.db_instance_endpoint
+}
+
+output "cognito_user_pool_id" {
+  description = "ID of the Cognito User Pool"
+  value       = module.auth.cognito_user_pool_id
+}
+
+output "cognito_app_client_id" {
+  description = "ID of the Cognito App Client"
+  value       = module.auth.cognito_app_client_id
+}
+
+output "cognito_domain" {
+  description = "Cognito domain for hosted UI"
+  value       = module.auth.cognito_domain
+}
+
+output "auth_endpoint" {
+  description = "URL of the auth endpoint"
+  value       = "${module.api.api_endpoint}/auth"
 }
