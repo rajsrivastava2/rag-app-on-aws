@@ -1,4 +1,10 @@
+# =========================
 # Root variables.tf
+# =========================
+
+# -------------------------
+# Project Configuration
+# -------------------------
 variable "aws_region" {
   description = "AWS region for all resources"
   type        = string
@@ -16,6 +22,9 @@ variable "stage" {
   default     = "prod"
 }
 
+# -------------------------
+# Lambda Configuration
+# -------------------------
 variable "lambda_memory_size" {
   description = "Memory size for Lambda functions in MB"
   type        = number
@@ -28,7 +37,9 @@ variable "lambda_timeout" {
   default     = 120
 }
 
+# -------------------------
 # VPC Configuration
+# -------------------------
 variable "vpc_cidr" {
   description = "CIDR block for the VPC"
   type        = string
@@ -41,7 +52,33 @@ variable "az_count" {
   default     = 2
 }
 
+variable "single_nat_gateway" {
+  description = "NAT Gateway to use"
+  type        = bool
+  default     = true
+}
+
+variable "enable_flow_logs" {
+  description = "Enable flow log"
+  type        = bool
+  default     = false
+}
+
+variable "bastion_allowed_cidr" {
+  description = "CIDR blocks allowed to connect to bastion hosts"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]  # Should be restricted to your company IP range in production
+}
+
+variable "create_bastion_sg" {
+  description = "Create a security group for bastion hosts"
+  type        = bool
+  default     = true
+}
+
+# -------------------------
 # Database Configuration
+# -------------------------
 variable "db_instance_class" {
   description = "Instance class for the RDS instance"
   type        = string
@@ -78,6 +115,9 @@ variable "reset_db_password" {
   default     = false
 }
 
+# -------------------------
+# Storage Configuration
+# -------------------------
 variable "enable_lifecycle_rules" {
   description = "Enable S3 lifecycle rules for cost optimization"
   type        = bool
@@ -96,29 +136,41 @@ variable "glacier_transition_days" {
   default     = 365
 }
 
-variable "bastion_allowed_cidr" {
-  description = "CIDR blocks allowed to connect to bastion hosts"
-  type        = list(string)
-  default     = ["0.0.0.0/0"]  # Should be restricted to your company IP range in production
-}
-
-# Monitoring module variables
+# -------------------------
+# Monitoring Configuration
+# -------------------------
 variable "alert_email" {
   description = "Email address for CloudWatch alerts"
   type        = string
-  default     = "" # Set this in your tfvars file
+  default     = ""  # Set this in your tfvars file
 }
 
-# For dashboard reference only, not required for resource creation
+# -------------------------
+# Dashboard References
+# -------------------------
 variable "metadata_table_name" {
   description = "Name of the DynamoDB table for metadata (used in prod dashboards)"
   type        = string
   default     = ""
 }
 
-# For dashboard reference only, not required for resource creation
 variable "documents_bucket_name" {
   description = "Name of the S3 bucket for documents (used in prod dashboards)"
   type        = string
   default     = ""
+}
+
+# -------------------------
+# GitHub Repo
+# -------------------------
+variable "github_repo" {
+  description = "GitHub Repo Name"
+  type        = string
+  default     = "genieincodebottle/rag-app-on-aws"
+}
+
+variable "github_branch" {
+  description = "GitHub Branch"
+  type        = string
+  default     = "main"
 }
