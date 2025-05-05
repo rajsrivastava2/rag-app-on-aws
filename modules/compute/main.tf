@@ -82,8 +82,8 @@ resource "aws_iam_policy" "lambda_policy" {
         Action = ["secretsmanager:GetSecretValue"],
         Resource = var.db_secret_arn != "" ? [
           var.db_secret_arn,
-          "arn:aws:secretsmanager:${var.aws_region}:*:secret:rag-app-gemini-api-key*"
-        ] : ["arn:aws:secretsmanager:${var.aws_region}:*:secret:rag-app-gemini-api-key*"]
+          "arn:aws:secretsmanager:${var.aws_region}:*:secret:${var.project_name}-gemini-api-key*"
+        ] : ["arn:aws:secretsmanager:${var.aws_region}:*:secret:${var.project_name}-gemini-api-key*"]
       },
       {
         Effect = "Allow",
@@ -198,7 +198,7 @@ resource "aws_lambda_function" "document_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "rag-app-gemini-api-key"
+      GEMINI_SECRET_NAME       = "${var.project_name}-gemini-api-key"
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
@@ -237,7 +237,7 @@ resource "aws_lambda_function" "query_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "rag-app-gemini-api-key"
+      GEMINI_SECRET_NAME       = "${var.project_name}-gemini-api-key"
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2

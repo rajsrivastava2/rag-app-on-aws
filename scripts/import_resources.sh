@@ -23,9 +23,9 @@ else
 fi
 
 # Set default values if not found
-PROJECT_NAME=${PROJECT_NAME:-"rag-app-on-aws"}
-STAGE=${STAGE:-"dev"}
-REGION=${REGION:-"us-east-1"}
+PROJECT_NAME=${PROJECT_NAME}
+STAGE=${STAGE}
+REGION=${REGION}
 
 # Colors for output
 GREEN='\033[0;32m'

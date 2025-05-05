@@ -1,0 +1,430 @@
+#!/bin/bash
+
+# AWS RAG Application Cleanup Script
+# This script removes all AWS resources created for the RAG application on AWS
+
+# Set text colors for better readability
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Banner
+echo -e "${YELLOW}"
+echo "============================================================"
+echo "         AWS RAG Application - Complete Cleanup Script       "
+echo "============================================================"
+echo -e "${NC}"
+
+# Get project configuration
+read -p "Enter your project name (default: rag-app): " PROJECT_NAME
+PROJECT_NAME=${PROJECT_NAME:-rag-app}
+
+read -p "Enter environment/stage (default: dev): " STAGE
+STAGE=${STAGE:-dev}
+
+read -p "Enter AWS region (default: us-east-1): " AWS_REGION
+AWS_REGION=${AWS_REGION:-us-east-1}
+
+echo -e "\n${YELLOW}This script will DELETE ALL resources for:"
+echo -e "  Project: ${PROJECT_NAME}"
+echo -e "  Stage: ${STAGE}"
+echo -e "  Region: ${AWS_REGION}${NC}"
+echo -e "${RED}WARNING: This action is IRREVERSIBLE and will delete ALL data!${NC}"
+read -p "Are you sure you want to proceed? (yes/no): " CONFIRMATION
+
+if [[ $CONFIRMATION != "yes" ]]; then
+    echo "Cleanup cancelled."
+    exit 0
+fi
+
+echo -e "\n${YELLOW}Starting cleanup process...${NC}"
+
+# Clear terraform state lock if it exists
+echo -e "\n${YELLOW}Checking for terraform state locks...${NC}"
+DYNAMODB_TABLE="${PROJECT_NAME}--${STAGE}-terraform-state-lock"
+LOCK_ID=$(aws dynamodb scan --table-name $DYNAMODB_TABLE --region $AWS_REGION --query "Items[?contains(LockID, 'terraform-')].LockID" --output text 2>/dev/null || echo "")
+
+if [ -n "$LOCK_ID" ]; then
+    echo -e "${YELLOW}Found lock in DynamoDB: $LOCK_ID. Removing...${NC}"
+    aws dynamodb delete-item --table-name $DYNAMODB_TABLE --key "{\"LockID\":{\"S\":\"$LOCK_ID\"}}" --region $AWS_REGION
+    echo -e "${GREEN}Terraform state lock removed.${NC}"
+fi
+
+# 1. Delete all files in S3 buckets (to allow bucket deletion)
+echo -e "\n${YELLOW}Emptying S3 buckets...${NC}"
+
+BUCKETS=(
+    "${PROJECT_NAME}-${STAGE}-documents"
+    "${PROJECT_NAME}-${STAGE}-lambda-code"
+    "${PROJECT_NAME}-terraform-state"
+)
+
+for BUCKET in "${BUCKETS[@]}"; do
+    echo -e "Checking if bucket exists: ${BUCKET}"
+    if aws s3api head-bucket --bucket ${BUCKET} --region ${AWS_REGION} 2>/dev/null; then
+        echo -e "Emptying bucket: ${BUCKET}"
+        
+        # First remove versioned objects
+        echo "Removing versioned objects..."
+        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
+        jq -r '.Versions[] | .Key + " " + .VersionId' | \
+        while read KEY VERSION_ID; do
+            echo "Deleting object: $KEY (version $VERSION_ID)"
+            aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+        done
+        
+        # Then remove delete markers
+        echo "Removing delete markers..."
+        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
+        jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | \
+        while read KEY VERSION_ID; do
+            echo "Deleting delete marker: $KEY (version $VERSION_ID)"
+            aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+        done
+        
+        # Finally remove current objects
+        echo "Removing current objects..."
+        aws s3 rm s3://${BUCKET} --recursive --region ${AWS_REGION}
+    else
+        echo "Bucket ${BUCKET} not found or cannot be accessed"
+    fi
+done
+
+# 2. Remove all API Gateway stages and deployments
+echo -e "\n${YELLOW}Deleting API Gateway resources...${NC}"
+API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${PROJECT_NAME}-${STAGE}-api'].id" --output text --region $AWS_REGION)
+
+if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
+    echo "Found API Gateway: $API_ID. Deleting..."
+    aws apigateway delete-rest-api --rest-api-id $API_ID --region $AWS_REGION
+    echo -e "${GREEN}API Gateway deleted.${NC}"
+else
+    echo "No API Gateway found."
+fi
+
+# 3. Delete all Lambda functions
+echo -e "\n${YELLOW}Deleting Lambda functions...${NC}"
+LAMBDA_FUNCTIONS=(
+    "${PROJECT_NAME}-${STAGE}-auth-handler"
+    "${PROJECT_NAME}-${STAGE}-document-processor"
+    "${PROJECT_NAME}-${STAGE}-query-processor"
+    "${PROJECT_NAME}-${STAGE}-upload-handler"
+    "${PROJECT_NAME}-${STAGE}-db-init"
+)
+
+for FUNCTION in "${LAMBDA_FUNCTIONS[@]}"; do
+    echo "Deleting Lambda function: $FUNCTION"
+    aws lambda delete-function --function-name $FUNCTION --region $AWS_REGION || echo "Function $FUNCTION not found or already deleted"
+done
+
+# 4. Delete CloudWatch Log Groups
+echo -e "\n${YELLOW}Deleting CloudWatch Log Groups...${NC}"
+LOG_GROUPS=(
+    "/aws/lambda/${PROJECT_NAME}-${STAGE}-auth-handler"
+    "/aws/lambda/${PROJECT_NAME}-${STAGE}-document-processor"
+    "/aws/lambda/${PROJECT_NAME}-${STAGE}-query-processor"
+    "/aws/lambda/${PROJECT_NAME}-${STAGE}-upload-handler"
+    "/aws/lambda/${PROJECT_NAME}-${STAGE}-db-init"
+    "/aws/apigateway/${PROJECT_NAME}-${STAGE}-api"
+)
+
+for LOG_GROUP in "${LOG_GROUPS[@]}"; do
+    echo "Deleting Log Group: $LOG_GROUP"
+    aws logs delete-log-group --log-group-name $LOG_GROUP --region $AWS_REGION || echo "Log Group $LOG_GROUP not found or already deleted"
+done
+
+# 5. Delete DynamoDB tables
+echo -e "\n${YELLOW}Deleting DynamoDB tables...${NC}"
+TABLES=(
+    "${PROJECT_NAME}-${STAGE}-metadata"
+    "${PROJECT_NAME}--${STAGE}-terraform-state-lock"
+)
+
+for TABLE in "${TABLES[@]}"; do
+    echo "Deleting table: $TABLE"
+    aws dynamodb delete-table --table-name $TABLE --region $AWS_REGION || echo "Table $TABLE not found or already deleted"
+done
+
+# 6. Delete RDS instance and related resources
+echo -e "\n${YELLOW}Deleting RDS resources...${NC}"
+DB_INSTANCE="${PROJECT_NAME}-${STAGE}-postgres"
+DB_PARAM_GROUP="${PROJECT_NAME}-${STAGE}-postgres-params"
+DB_SUBNET_GROUP="${PROJECT_NAME}-${STAGE}-db-subnet-group"
+
+# Delete RDS instance
+echo "Deleting RDS instance: $DB_INSTANCE"
+aws rds delete-db-instance --db-instance-identifier $DB_INSTANCE --skip-final-snapshot --delete-automated-backups --region $AWS_REGION || echo "RDS instance $DB_INSTANCE not found or already deleted"
+
+# Wait for RDS instance to be deleted before removing parameter group
+echo "Waiting for RDS instance deletion to complete..."
+aws rds wait db-instance-deleted --db-instance-identifier $DB_INSTANCE --region $AWS_REGION || echo "Failed to wait for RDS instance deletion, continuing anyway"
+
+# Delete parameter group
+echo "Deleting DB parameter group: $DB_PARAM_GROUP"
+aws rds delete-db-parameter-group --db-parameter-group-name $DB_PARAM_GROUP --region $AWS_REGION || echo "Parameter group $DB_PARAM_GROUP not found or already deleted"
+
+# Delete subnet group
+echo "Deleting DB subnet group: $DB_SUBNET_GROUP"
+aws rds delete-db-subnet-group --db-subnet-group-name $DB_SUBNET_GROUP --region $AWS_REGION || echo "Subnet group $DB_SUBNET_GROUP not found or already deleted"
+
+# 7. Delete Cognito resources
+echo -e "\n${YELLOW}Deleting Cognito resources...${NC}"
+USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 20 --query "UserPools[?Name=='${PROJECT_NAME}-${STAGE}-user-pool'].Id" --output text --region $AWS_REGION)
+
+if [ -n "$USER_POOL_ID" ] && [ "$USER_POOL_ID" != "None" ]; then
+    echo "Found Cognito User Pool: $USER_POOL_ID. Deleting..."
+    
+    # Delete domain first
+    DOMAIN="${PROJECT_NAME}-${STAGE}-auth"
+    aws cognito-idp delete-user-pool-domain --domain $DOMAIN --user-pool-id $USER_POOL_ID --region $AWS_REGION || echo "Domain $DOMAIN not found or already deleted"
+    
+    # Delete user pool clients
+    CLIENT_IDS=$(aws cognito-idp list-user-pool-clients --user-pool-id $USER_POOL_ID --query "UserPoolClients[].ClientId" --output text --region $AWS_REGION)
+    for CLIENT_ID in $CLIENT_IDS; do
+        echo "Deleting User Pool Client: $CLIENT_ID"
+        aws cognito-idp delete-user-pool-client --user-pool-id $USER_POOL_ID --client-id $CLIENT_ID --region $AWS_REGION || echo "Client $CLIENT_ID not found or already deleted"
+    done
+    
+    # Delete user pool
+    aws cognito-idp delete-user-pool --user-pool-id $USER_POOL_ID --region $AWS_REGION || echo "User Pool $USER_POOL_ID not found or already deleted"
+    echo -e "${GREEN}Cognito User Pool deleted.${NC}"
+else
+    echo "No Cognito User Pool found."
+fi
+
+# 8. Delete Secrets Manager secrets
+echo -e "\n${YELLOW}Deleting Secrets Manager secrets...${NC}"
+SECRETS=(
+    "${PROJECT_NAME}-${STAGE}-db-credentials"
+    "${PROJECT_NAME}-gemini-api-key"
+)
+
+for SECRET in "${SECRETS[@]}"; do
+    echo "Deleting secret: $SECRET"
+    aws secretsmanager delete-secret --secret-id $SECRET --force-delete-without-recovery --region $AWS_REGION || echo "Secret $SECRET not found or already deleted"
+done
+
+# 9. Delete SNS topics
+echo -e "\n${YELLOW}Deleting SNS topics...${NC}"
+TOPIC_ARN=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${PROJECT_NAME}-${STAGE}-alerts')].TopicArn" --output text --region $AWS_REGION)
+
+if [ -n "$TOPIC_ARN" ] && [ "$TOPIC_ARN" != "None" ]; then
+    echo "Found SNS topic: $TOPIC_ARN. Deleting..."
+    aws sns delete-topic --topic-arn $TOPIC_ARN --region $AWS_REGION || echo "Topic $TOPIC_ARN not found or already deleted"
+    echo -e "${GREEN}SNS topic deleted.${NC}"
+else
+    echo "No SNS topic found."
+fi
+
+# 10. Delete all IAM roles and policies created for the project
+echo -e "\n${YELLOW}Deleting IAM roles and policies...${NC}"
+
+# Get all IAM roles with the project prefix
+IAM_ROLES=$(aws iam list-roles --query "Roles[?starts_with(RoleName, '${PROJECT_NAME}-${STAGE}')].RoleName" --output text)
+
+for ROLE_NAME in $IAM_ROLES; do
+    echo "Processing role: $ROLE_NAME"
+    
+    # Get attached managed policies
+    ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name $ROLE_NAME --query "AttachedPolicies[].PolicyArn" --output text)
+    
+    # Detach all managed policies
+    for POLICY_ARN in $ATTACHED_POLICIES; do
+        echo "Detaching policy $POLICY_ARN from role $ROLE_NAME"
+        aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn $POLICY_ARN || echo "Failed to detach policy $POLICY_ARN"
+    done
+    
+    # Get inline policies
+    INLINE_POLICIES=$(aws iam list-role-policies --role-name $ROLE_NAME --query "PolicyNames[]" --output text)
+    
+    # Delete all inline policies
+    for POLICY_NAME in $INLINE_POLICIES; do
+        echo "Deleting inline policy $POLICY_NAME from role $ROLE_NAME"
+        aws iam delete-role-policy --role-name $ROLE_NAME --policy-name $POLICY_NAME || echo "Failed to delete inline policy $POLICY_NAME"
+    done
+    
+    # Delete the role
+    echo "Deleting role: $ROLE_NAME"
+    aws iam delete-role --role-name $ROLE_NAME || echo "Failed to delete role $ROLE_NAME"
+done
+
+# Get all customer managed policies with the project prefix
+IAM_POLICIES=$(aws iam list-policies --scope Local --query "Policies[?starts_with(PolicyName, '${PROJECT_NAME}-${STAGE}')].Arn" --output text)
+
+# Delete all policies
+for POLICY_ARN in $IAM_POLICIES; do
+    echo "Deleting policy: $POLICY_ARN"
+    aws iam delete-policy --policy-arn $POLICY_ARN || echo "Failed to delete policy $POLICY_ARN"
+done
+
+# 11. Delete VPC resources in proper order
+echo -e "\n${YELLOW}Finding VPC resources...${NC}"
+VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PROJECT_NAME}-${STAGE}-vpc" --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
+
+# If first attempt doesn't find the VPC, try with a wildcard tag search
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
+    echo "VPC not found with specific tag, trying alternative search..."
+    VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag-key,Values=Name" "Name=tag-value,Values=*${PROJECT_NAME}*${STAGE}*" --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
+fi
+
+if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
+    echo "Found VPC: $VPC_ID. Deleting associated resources..."
+    
+    # Delete Network Interfaces first
+    echo "Looking for Network Interfaces..."
+    ENI_IDS=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+    for ENI_ID in $ENI_IDS; do
+        echo "Deleting Network Interface: $ENI_ID"
+        # First check if it has any attachment
+        ATTACHMENT=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
+        if [ -n "$ATTACHMENT" ] && [ "$ATTACHMENT" != "None" ]; then
+            echo "Detaching attachment: $ATTACHMENT"
+            aws ec2 detach-network-interface --attachment-id $ATTACHMENT --force --region $AWS_REGION
+            # Wait for detachment
+            sleep 10
+        fi
+        aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Failed to delete network interface $ENI_ID"
+    done
+    
+    # Delete NAT gateways
+    NAT_GATEWAY_IDS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" --query "NatGateways[?State!='deleted'].NatGatewayId" --output text --region $AWS_REGION)
+    for NAT_ID in $NAT_GATEWAY_IDS; do
+        echo "Deleting NAT Gateway: $NAT_ID"
+        aws ec2 delete-nat-gateway --nat-gateway-id $NAT_ID --region $AWS_REGION || echo "Failed to delete NAT Gateway $NAT_ID"
+    done
+    
+    # Wait for NAT gateways to be deleted
+    if [ -n "$NAT_GATEWAY_IDS" ]; then
+        echo "Waiting for NAT Gateways to be deleted..."
+        sleep 60  # Increased wait time
+    fi
+    
+    # Release Elastic IPs
+    EIP_ALLOC_IDS=$(aws ec2 describe-addresses --filter "Name=domain,Values=vpc" --query "Addresses[].AllocationId" --output text --region $AWS_REGION)
+    for EIP_ID in $EIP_ALLOC_IDS; do
+        echo "Releasing Elastic IP: $EIP_ID"
+        aws ec2 release-address --allocation-id $EIP_ID --region $AWS_REGION || echo "Failed to release EIP $EIP_ID"
+    done
+    
+    # Delete VPC endpoints
+    ENDPOINTS=$(aws ec2 describe-vpc-endpoints --filters "Name=vpc-id,Values=$VPC_ID" --query "VpcEndpoints[].VpcEndpointId" --output text --region $AWS_REGION)
+    for ENDPOINT in $ENDPOINTS; do
+        echo "Deleting VPC Endpoint: $ENDPOINT"
+        aws ec2 delete-vpc-endpoints --vpc-endpoint-ids $ENDPOINT --region $AWS_REGION || echo "Failed to delete endpoint $ENDPOINT"
+    done
+    
+    # Delete security groups (except default)
+    SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
+    for SG_ID in $SG_IDS; do
+        echo "Deleting Security Group: $SG_ID"
+        aws ec2 delete-security-group --group-id $SG_ID --region $AWS_REGION || echo "Failed to delete security group $SG_ID"
+    done
+    
+    # Delete Network ACLs (except default)
+    NACL_IDS=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkAcls[?!IsDefault].NetworkAclId" --output text --region $AWS_REGION)
+    for NACL_ID in $NACL_IDS; do
+        echo "Deleting Network ACL: $NACL_ID"
+        aws ec2 delete-network-acl --network-acl-id $NACL_ID --region $AWS_REGION || echo "Failed to delete Network ACL $NACL_ID"
+    done
+    
+    # Delete subnets
+    SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
+    for SUBNET_ID in $SUBNET_IDS; do
+        echo "Deleting Subnet: $SUBNET_ID"
+        aws ec2 delete-subnet --subnet-id $SUBNET_ID --region $AWS_REGION || echo "Failed to delete subnet $SUBNET_ID"
+    done
+    
+    # Delete route tables (except the main one)
+    RT_IDS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query "RouteTables[?!Associations[?Main]].RouteTableId" --output text --region $AWS_REGION)
+    for RT_ID in $RT_IDS; do
+        echo "Checking if Route Table $RT_ID has associations..."
+        RT_ASSOC_IDS=$(aws ec2 describe-route-tables --route-table-ids $RT_ID --query "RouteTables[0].Associations[?!Main].RouteTableAssociationId" --output text --region $AWS_REGION)
+        
+        for ASSOC_ID in $RT_ASSOC_IDS; do
+            echo "Disassociating Route Table Association: $ASSOC_ID"
+            aws ec2 disassociate-route-table --association-id $ASSOC_ID --region $AWS_REGION || echo "Failed to disassociate route table association $ASSOC_ID"
+        done
+        
+        echo "Deleting Route Table: $RT_ID"
+        aws ec2 delete-route-table --route-table-id $RT_ID --region $AWS_REGION || echo "Failed to delete route table $RT_ID"
+    done
+    
+    # Detach and delete internet gateway
+    IG_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
+    if [ -n "$IG_ID" ] && [ "$IG_ID" != "None" ]; then
+        echo "Detaching Internet Gateway: $IG_ID"
+        aws ec2 detach-internet-gateway --internet-gateway-id $IG_ID --vpc-id $VPC_ID --region $AWS_REGION || echo "Failed to detach internet gateway"
+        
+        echo "Deleting Internet Gateway: $IG_ID"
+        aws ec2 delete-internet-gateway --internet-gateway-id $IG_ID --region $AWS_REGION || echo "Failed to delete internet gateway $IG_ID"
+    fi
+    
+    # Delete any VPC Peering connections
+    PEERING_IDS=$(aws ec2 describe-vpc-peering-connections --filters "Name=requester-vpc-info.vpc-id,Values=$VPC_ID" --query "VpcPeeringConnections[].VpcPeeringConnectionId" --output text --region $AWS_REGION)
+    for PEER_ID in $PEERING_IDS; do
+        echo "Deleting VPC Peering Connection: $PEER_ID"
+        aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id $PEER_ID --region $AWS_REGION || echo "Failed to delete VPC peering connection $PEER_ID"
+    done
+    
+    # Now delete the VPC
+    echo "Deleting VPC: $VPC_ID"
+    aws ec2 delete-vpc --vpc-id $VPC_ID --region $AWS_REGION || echo "Failed to delete VPC $VPC_ID"
+    
+    echo -e "${GREEN}VPC and related resources deleted (or deletion in progress).${NC}"
+else
+    echo "No VPC found."
+fi
+
+# 12. Delete S3 buckets (after emptying them)
+echo -e "\n${YELLOW}Deleting S3 buckets...${NC}"
+
+BUCKETS=(
+    "${PROJECT_NAME}-${STAGE}-documents"
+    "${PROJECT_NAME}-${STAGE}-lambda-code"
+    "${PROJECT_NAME}-terraform-state"
+)
+
+for BUCKET in "${BUCKETS[@]}"; do
+    echo "Deleting bucket: $BUCKET"
+    # Check if bucket exists before attempting to delete
+    if aws s3api head-bucket --bucket ${BUCKET} --region ${AWS_REGION} 2>/dev/null; then
+        # Try to delete the bucket
+        if aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION; then
+            echo "Successfully deleted bucket: $BUCKET"
+        else
+            echo "Failed to delete bucket: $BUCKET, trying force delete..."
+            
+            # If failed, try force delete again by removing all versions and delete markers
+            echo "Force removing all objects and versions from $BUCKET"
+            
+            # Remove versions
+            aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
+            jq -r '.Versions[]? | .Key + " " + .VersionId' | \
+            while read KEY VERSION_ID; do
+                echo "Deleting object: $KEY (version $VERSION_ID)"
+                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            done
+            
+            # Remove delete markers
+            aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
+            jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | \
+            while read KEY VERSION_ID; do
+                echo "Deleting delete marker: $KEY (version $VERSION_ID)"
+                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            done
+            
+            # Try to delete bucket again
+            echo "Attempting to delete bucket again: $BUCKET"
+            aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION || echo "Failed to delete bucket $BUCKET even after removing all objects"
+        fi
+    else
+        echo "Bucket $BUCKET does not exist or cannot be accessed"
+    fi
+done
+
+echo -e "\n${GREEN}==================================================${NC}"
+echo -e "${GREEN}    Cleanup Complete!                             ${NC}"
+echo -e "${GREEN}==================================================${NC}"
+echo -e "${YELLOW}Note: Some resources may take time to fully delete.${NC}"
+echo -e "${YELLOW}Check the AWS Console to verify all resources have been removed.${NC}"
