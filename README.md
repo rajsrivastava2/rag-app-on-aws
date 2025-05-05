@@ -1,10 +1,12 @@
 # RAG Infrastructure on AWS
 
-Terraform-based Infrastructure as Code (IaC) for deploying the complete AWS infrastructure with backend codes required by the [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui).
+Terraform-based Infrastructure as Code (IaC) for deploying the complete AWS infrastructure with backend codes required by the 
 
-[Infra Provisioning Lifecycle Flow](https://github.com/genieincodebottle/rag-app-n-aws/blob/main/images/infra_provisioning_sequence.png)
+- [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui).
 
-I’ll break this down in a YouTube video soon, coming in a few days.
+- [Infra Provisioning Lifecycle Flow](https://github.com/genieincodebottle/rag-app-on-aws/blob/main/images/infra_provisioning_sequence.png)
+
+I’ll break this down in a Yt video soon, coming in a few days.
 
 ## Table of Contents
 
