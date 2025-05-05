@@ -37,7 +37,7 @@ TOP_P = float(os.environ.get('TOP_P'))
 def get_gemini_api_key():
     try:
         response = secretsmanager.get_secret_value(SecretId=GEMINI_SECRET_NAME)
-        return json.loads(response['SecretString'])['api_key']
+        return json.loads(response['SecretString'])['GEMINI_API_KEY']
     except Exception as e:
         logger.error(f"Error fetching Gemini API key: {str(e)}")
         raise

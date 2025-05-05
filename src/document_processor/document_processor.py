@@ -54,7 +54,7 @@ def get_gemini_api_key():
             SecretId=GEMINI_SECRET_NAME
         )
         secret = json.loads(secret_response['SecretString'])
-        return secret['api_key']
+        return secret['GEMINI_API_KEY']
     except Exception as e:
         logger.error(f"Error getting Gemini API key: {str(e)}")
         raise e
