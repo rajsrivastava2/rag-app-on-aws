@@ -31,7 +31,7 @@ os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
 # Mock response for Secrets Manager
 mock_secret_response = MagicMock()
-mock_secret_response.return_value = {"SecretString": '{"api_key": "test-api-key"}'}
+mock_secret_response.return_value = {"SecretString": '{"GEMINI_API_KEY": "test-api-key"}'}
 
 # Mock boto3
 mock_boto3 = MagicMock()
