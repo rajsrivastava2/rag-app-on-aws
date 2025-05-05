@@ -1,5 +1,5 @@
 # ============================================================
-# Root Module for RAG Application Deployment (main.tf)
+# Root Module for RAG Application Deployment in Dev env (main.tf)
 # ============================================================
 # Provisions project-wide infrastructure by composing all modules
 
