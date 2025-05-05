@@ -40,15 +40,38 @@ fi
 
 echo -e "\n${YELLOW}Starting cleanup process...${NC}"
 
+# Check for jq command
+if ! command -v jq &> /dev/null; then
+    echo -e "${YELLOW}Warning: jq command not found. Will use alternative methods for JSON processing.${NC}"
+    USE_JQ=false
+else
+    USE_JQ=true
+fi
+
 # Clear terraform state lock if it exists
 echo -e "\n${YELLOW}Checking for terraform state locks...${NC}"
-DYNAMODB_TABLE="${PROJECT_NAME}--${STAGE}-terraform-state-lock"
-LOCK_ID=$(aws dynamodb scan --table-name $DYNAMODB_TABLE --region $AWS_REGION --query "Items[?contains(LockID, 'terraform-')].LockID" --output text 2>/dev/null || echo "")
-
-if [ -n "$LOCK_ID" ]; then
-    echo -e "${YELLOW}Found lock in DynamoDB: $LOCK_ID. Removing...${NC}"
-    aws dynamodb delete-item --table-name $DYNAMODB_TABLE --key "{\"LockID\":{\"S\":\"$LOCK_ID\"}}" --region $AWS_REGION
-    echo -e "${GREEN}Terraform state lock removed.${NC}"
+DYNAMODB_TABLE="${PROJECT_NAME}-${STAGE}-terraform-state-lock"
+if aws dynamodb describe-table --table-name $DYNAMODB_TABLE --region $AWS_REGION &> /dev/null; then
+    echo "Table $DYNAMODB_TABLE exists. Looking for locks..."
+    # Try to find any locks without using jq
+    LOCK_ITEMS=$(aws dynamodb scan --table-name $DYNAMODB_TABLE --region $AWS_REGION --output json)
+    
+    if [[ $USE_JQ == true ]]; then
+        LOCK_ID=$(echo "$LOCK_ITEMS" | jq -r '.Items[] | select(.LockID.S | contains("terraform-")) | .LockID.S' 2>/dev/null || echo "")
+    else
+        # Simple grep fallback
+        LOCK_ID=$(echo "$LOCK_ITEMS" | grep -o '"LockID":{"S":"[^"]*"' | grep -o 'terraform-[^"]*' || echo "")
+    fi
+    
+    if [ -n "$LOCK_ID" ]; then
+        echo -e "${YELLOW}Found lock in DynamoDB: $LOCK_ID. Removing...${NC}"
+        aws dynamodb delete-item --table-name $DYNAMODB_TABLE --key "{\"LockID\":{\"S\":\"$LOCK_ID\"}}" --region $AWS_REGION
+        echo -e "${GREEN}Terraform state lock removed.${NC}"
+    else
+        echo "No terraform locks found in table."
+    fi
+else
+    echo "Terraform state lock table does not exist. Skipping."
 fi
 
 # 1. Delete all files in S3 buckets (to allow bucket deletion)
@@ -65,33 +88,65 @@ for BUCKET in "${BUCKETS[@]}"; do
     if aws s3api head-bucket --bucket ${BUCKET} --region ${AWS_REGION} 2>/dev/null; then
         echo -e "Emptying bucket: ${BUCKET}"
         
-        # First remove versioned objects
-        echo "Removing versioned objects..."
-        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
-        jq -r '.Versions[] | .Key + " " + .VersionId' | \
-        while read KEY VERSION_ID; do
-            echo "Deleting object: $KEY (version $VERSION_ID)"
-            aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-        done
+        # For terraform state bucket, only remove objects related to the current stage
+        if [[ $BUCKET == *"terraform-state"* ]]; then
+            echo "This is a terraform state bucket. Removing only objects for stage: ${STAGE}"
+            # Remove objects for the specific stage
+            aws s3 rm "s3://${BUCKET}/${STAGE}/" --recursive --region ${AWS_REGION}
+            
+            # We'll skip full deletion for terraform state bucket since it may contain state for other stages
+            continue
+        fi
         
-        # Then remove delete markers
-        echo "Removing delete markers..."
-        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
-        jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | \
-        while read KEY VERSION_ID; do
-            echo "Deleting delete marker: $KEY (version $VERSION_ID)"
-            aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-        done
+        # Alternative method without jq to list and delete objects and versions
+        echo "Removing all objects and versions..."
         
-        # Finally remove current objects
-        echo "Removing current objects..."
-        aws s3 rm s3://${BUCKET} --recursive --region ${AWS_REGION}
+        # For non-terraform buckets, remove everything
+        # First, delete all objects
+        aws s3 rm "s3://${BUCKET}" --recursive --region ${AWS_REGION}
+        
+        # Then list all versions and delete them
+        VERSIONS=$(aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION})
+        
+        if [[ $USE_JQ == true ]]; then
+            # Extract version IDs and keys using jq
+            echo "$VERSIONS" | jq -r '.Versions[] | .Key + " " + .VersionId' 2>/dev/null | \
+            while read KEY VERSION_ID; do
+                echo "Deleting object: $KEY (version $VERSION_ID)"
+                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            done
+            
+            # Delete delete markers
+            echo "$VERSIONS" | jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' 2>/dev/null | \
+            while read KEY VERSION_ID; do
+                echo "Deleting delete marker: $KEY (version $VERSION_ID)"
+                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            done
+        else
+            # Alternative method using grep and cut
+            VERSION_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "Versions[*].[Key, VersionId]" --output text --region ${AWS_REGION})
+            echo "$VERSION_LIST" | while read -r KEY VERSION_ID; do
+                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
+                    echo "Deleting object: $KEY (version $VERSION_ID)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+                fi
+            done
+            
+            # Delete delete markers
+            MARKER_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "DeleteMarkers[*].[Key, VersionId]" --output text --region ${AWS_REGION})
+            echo "$MARKER_LIST" | while read -r KEY VERSION_ID; do
+                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
+                    echo "Deleting delete marker: $KEY (version $VERSION_ID)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+                fi
+            done
+        fi
     else
         echo "Bucket ${BUCKET} not found or cannot be accessed"
     fi
 done
 
-# 2. Remove all API Gateway stages and deployments
+# 2. Remove all API Gateway resources
 echo -e "\n${YELLOW}Deleting API Gateway resources...${NC}"
 API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${PROJECT_NAME}-${STAGE}-api'].id" --output text --region $AWS_REGION)
 
@@ -131,14 +186,15 @@ LOG_GROUPS=(
 
 for LOG_GROUP in "${LOG_GROUPS[@]}"; do
     echo "Deleting Log Group: $LOG_GROUP"
-    aws logs delete-log-group --log-group-name $LOG_GROUP --region $AWS_REGION || echo "Log Group $LOG_GROUP not found or already deleted"
+    # Fix escaping for Windows Git Bash - use double quotes to prevent path handling issues
+    aws logs delete-log-group --log-group-name "$LOG_GROUP" --region $AWS_REGION || echo "Log Group $LOG_GROUP not found or already deleted"
 done
 
 # 5. Delete DynamoDB tables
 echo -e "\n${YELLOW}Deleting DynamoDB tables...${NC}"
 TABLES=(
     "${PROJECT_NAME}-${STAGE}-metadata"
-    "${PROJECT_NAME}--${STAGE}-terraform-state-lock"
+    "${PROJECT_NAME}-${STAGE}-terraform-state-lock"
 )
 
 for TABLE in "${TABLES[@]}"; do
@@ -197,7 +253,7 @@ fi
 echo -e "\n${YELLOW}Deleting Secrets Manager secrets...${NC}"
 SECRETS=(
     "${PROJECT_NAME}-${STAGE}-db-credentials"
-    "${PROJECT_NAME}-gemini-api-key"
+    "${PROJECT_NAME}-${STAGE}-gemini-api-key"
 )
 
 for SECRET in "${SECRETS[@]}"; do
@@ -258,7 +314,11 @@ for POLICY_ARN in $IAM_POLICIES; do
     aws iam delete-policy --policy-arn $POLICY_ARN || echo "Failed to delete policy $POLICY_ARN"
 done
 
-# 11. Delete VPC resources in proper order
+# 11. Wait for resources to be fully released before trying to delete VPC
+echo -e "\n${YELLOW}Waiting for resources to be fully released (60 seconds)...${NC}"
+sleep 60
+
+# 12. Delete VPC resources in proper order
 echo -e "\n${YELLOW}Finding VPC resources...${NC}"
 VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PROJECT_NAME}-${STAGE}-vpc" --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
 
@@ -275,16 +335,25 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     echo "Looking for Network Interfaces..."
     ENI_IDS=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
     for ENI_ID in $ENI_IDS; do
-        echo "Deleting Network Interface: $ENI_ID"
+        echo "Checking Network Interface: $ENI_ID"
         # First check if it has any attachment
         ATTACHMENT=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
         if [ -n "$ATTACHMENT" ] && [ "$ATTACHMENT" != "None" ]; then
-            echo "Detaching attachment: $ATTACHMENT"
-            aws ec2 detach-network-interface --attachment-id $ATTACHMENT --force --region $AWS_REGION
-            # Wait for detachment
-            sleep 10
+            ATTACH_TYPE=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
+            # Skip trying to detach managed attachments (like ELB)
+            if [[ $ATTACH_TYPE == ela-attach-* ]]; then
+                echo "Skipping managed attachment: $ATTACHMENT"
+            else
+                echo "Detaching attachment: $ATTACHMENT"
+                aws ec2 detach-network-interface --attachment-id $ATTACHMENT --force --region $AWS_REGION
+                # Wait for detachment
+                sleep 10
+            fi
         fi
-        aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Failed to delete network interface $ENI_ID"
+        
+        # Try to delete the interface, but continue if we can't
+        echo "Attempting to delete Network Interface: $ENI_ID"
+        aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Skipping network interface $ENI_ID (might still be in use)"
     done
     
     # Delete NAT gateways
@@ -296,12 +365,13 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     
     # Wait for NAT gateways to be deleted
     if [ -n "$NAT_GATEWAY_IDS" ]; then
-        echo "Waiting for NAT Gateways to be deleted..."
-        sleep 60  # Increased wait time
+        echo "Waiting for NAT Gateways to be deleted (up to 120 seconds)..."
+        sleep 120
     fi
     
     # Release Elastic IPs
-    EIP_ALLOC_IDS=$(aws ec2 describe-addresses --filter "Name=domain,Values=vpc" --query "Addresses[].AllocationId" --output text --region $AWS_REGION)
+    echo "Finding and releasing Elastic IPs associated with the VPC..."
+    EIP_ALLOC_IDS=$(aws ec2 describe-addresses --region $AWS_REGION --query "Addresses[].AllocationId" --output text)
     for EIP_ID in $EIP_ALLOC_IDS; do
         echo "Releasing Elastic IP: $EIP_ID"
         aws ec2 release-address --allocation-id $EIP_ID --region $AWS_REGION || echo "Failed to release EIP $EIP_ID"
@@ -313,6 +383,10 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
         echo "Deleting VPC Endpoint: $ENDPOINT"
         aws ec2 delete-vpc-endpoints --vpc-endpoint-ids $ENDPOINT --region $AWS_REGION || echo "Failed to delete endpoint $ENDPOINT"
     done
+    
+    # Wait for endpoints to be fully deleted
+    echo "Waiting for endpoints to be fully deleted (20 seconds)..."
+    sleep 20
     
     # Delete security groups (except default)
     SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
@@ -376,13 +450,12 @@ else
     echo "No VPC found."
 fi
 
-# 12. Delete S3 buckets (after emptying them)
+# 13. Delete S3 buckets (after emptying them)
 echo -e "\n${YELLOW}Deleting S3 buckets...${NC}"
 
 BUCKETS=(
     "${PROJECT_NAME}-${STAGE}-documents"
     "${PROJECT_NAME}-${STAGE}-lambda-code"
-    "${PROJECT_NAME}-terraform-state"
 )
 
 for BUCKET in "${BUCKETS[@]}"; do
@@ -395,26 +468,28 @@ for BUCKET in "${BUCKETS[@]}"; do
         else
             echo "Failed to delete bucket: $BUCKET, trying force delete..."
             
-            # If failed, try force delete again by removing all versions and delete markers
-            echo "Force removing all objects and versions from $BUCKET"
+            # Perform a recursive remove to ensure the bucket is empty
+            aws s3 rm s3://${BUCKET} --recursive --region ${AWS_REGION}
             
-            # Remove versions
-            aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
-            jq -r '.Versions[]? | .Key + " " + .VersionId' | \
-            while read KEY VERSION_ID; do
-                echo "Deleting object: $KEY (version $VERSION_ID)"
-                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            # Remove all object versions and delete markers without jq
+            VERSIONS_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "Versions[*].[Key, VersionId]" --output text --region ${AWS_REGION})
+            echo "$VERSIONS_LIST" | while read -r KEY VERSION_ID; do
+                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
+                    echo "Deleting object: $KEY (version $VERSION_ID)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+                fi
             done
             
-            # Remove delete markers
-            aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} | \
-            jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | \
-            while read KEY VERSION_ID; do
-                echo "Deleting delete marker: $KEY (version $VERSION_ID)"
-                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            # Delete delete markers
+            MARKERS_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "DeleteMarkers[*].[Key, VersionId]" --output text --region ${AWS_REGION})
+            echo "$MARKERS_LIST" | while read -r KEY VERSION_ID; do
+                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
+                    echo "Deleting delete marker: $KEY (version $VERSION_ID)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+                fi
             done
             
-            # Try to delete bucket again
+            # Try to delete the bucket one more time
             echo "Attempting to delete bucket again: $BUCKET"
             aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION || echo "Failed to delete bucket $BUCKET even after removing all objects"
         fi
@@ -422,6 +497,13 @@ for BUCKET in "${BUCKETS[@]}"; do
         echo "Bucket $BUCKET does not exist or cannot be accessed"
     fi
 done
+
+# Note about terraform state bucket
+echo -e "\n${YELLOW}Note about terraform state bucket:${NC}"
+echo "The terraform state bucket (${PROJECT_NAME}-terraform-state) was not fully deleted to preserve"
+echo "state files for other environments. Only the ${STAGE} folder was cleaned."
+echo "If you want to delete the entire bucket, you can run:"
+echo "aws s3 rb s3://${PROJECT_NAME}-terraform-state --force"
 
 echo -e "\n${GREEN}==================================================${NC}"
 echo -e "${GREEN}    Cleanup Complete!                             ${NC}"
