@@ -23,9 +23,9 @@ else
 fi
 
 # Set default values if not found
-PROJECT_NAME=${PROJECT_NAME:-"rag-app-on-aws"}
-STAGE=${STAGE:-"dev"}
-REGION=${REGION:-"us-east-1"}
+PROJECT_NAME=${PROJECT_NAME}
+STAGE=${STAGE}
+REGION=${REGION}
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -212,35 +212,63 @@ fi
 # ----------------------------------------
 # Secrets Manager
 # ----------------------------------------
-SECRET_NAME="${PROJECT_NAME}-${STAGE}-db-credentials"
+DB_SECRET_NAME="${PROJECT_NAME}-${STAGE}-db-credentials"
 
-echo -e "${YELLOW}Checking Secrets Manager secret: ${SECRET_NAME}${NC}"
-SECRET_ARN=$(aws secretsmanager list-secrets --filters "Key=name,Values=${SECRET_NAME}" --query "SecretList[0].ARN" --output text --region "${REGION}" 2>/dev/null)
+echo -e "${YELLOW}Checking Secrets Manager secret: ${DB_SECRET_NAME}${NC}"
+DB_SECRET_ARN=$(aws secretsmanager list-secrets --filters "Key=name,Values=${DB_SECRET_NAME}" --query "SecretList[0].ARN" --output text --region "${REGION}" 2>/dev/null)
 
-if [ -n "$SECRET_ARN" ] && [ "$SECRET_ARN" != "None" ]; then
-  echo -e "${GREEN}Secret exists (${SECRET_ARN}), checking state...${NC}"
+if [ -n "$DB_SECRET_ARN" ] && [ "$DB_SECRET_ARN" != "None" ]; then
+  echo -e "${GREEN}Secret exists (${DB_SECRET_ARN}), checking state...${NC}"
   
   if check_state "module.database.aws_secretsmanager_secret.db_credentials"; then
     echo -e "${GREEN}Secret already in state.${NC}"
   else
     echo -e "${YELLOW}Importing secret...${NC}"
-    terraform import "module.database.aws_secretsmanager_secret.db_credentials" "${SECRET_ARN}"
+    terraform import "module.database.aws_secretsmanager_secret.db_credentials" "${DB_SECRET_ARN}"
     
     # Import secret version if exists
-    CURRENT_VERSION=$(aws secretsmanager describe-secret --secret-id ${SECRET_ARN} --query "VersionIdsToStages" --output text --region "${REGION}" | grep AWSCURRENT | awk '{print $1}')
+    CURRENT_VERSION=$(aws secretsmanager describe-secret --secret-id ${DB_SECRET_ARN} --query "VersionIdsToStages" --output text --region "${REGION}" | grep AWSCURRENT | awk '{print $1}')
     
     if [ -n "$CURRENT_VERSION" ]; then
       echo -e "${YELLOW}Importing secret version...${NC}"
       if check_state "module.database.aws_secretsmanager_secret_version.db_credentials"; then
         terraform state rm module.database.aws_secretsmanager_secret_version.db_credentials
       fi
-      terraform import "module.database.aws_secretsmanager_secret_version.db_credentials" "${SECRET_ARN}|${CURRENT_VERSION}"
+      terraform import "module.database.aws_secretsmanager_secret_version.db_credentials" "${DB_SECRET_ARN}|${CURRENT_VERSION}"
     fi
   fi
 else
   echo -e "${YELLOW}Secret doesn't exist, will be created by Terraform${NC}"
 fi
 
+GEMINI_SECRET_NAME="${PROJECT_NAME}-${STAGE}-gemini-api-key"
+
+echo -e "${YELLOW}Checking Secrets Manager secret: ${GEMINI_SECRET_NAME}${NC}"
+GEMINI_SECRET_ARN=$(aws secretsmanager list-secrets --filters "Key=name,Values=${GEMINI_SECRET_NAME}" --query "SecretList[0].ARN" --output text --region "${REGION}" 2>/dev/null)
+
+if [ -n "$GEMINI_SECRET_ARN" ] && [ "$GEMINI_SECRET_ARN" != "None" ]; then
+  echo -e "${GREEN}Secret exists (${GEMINI_SECRET_ARN}), checking state...${NC}"
+  
+  if check_state "module.compute.aws_secretsmanager_secret.gemini_api_credentials"; then
+    echo -e "${GREEN}Secret already in state.${NC}"
+  else
+    echo -e "${YELLOW}Importing secret...${NC}"
+    terraform import "module.compute.aws_secretsmanager_secret.gemini_api_credentials" "${GEMINI_SECRET_ARN}"
+    
+    # Import secret version if exists
+    CURRENT_VERSION=$(aws secretsmanager describe-secret --secret-id ${GEMINI_SECRET_ARN} --query "VersionIdsToStages" --output text --region "${REGION}" | grep AWSCURRENT | awk '{print $1}')
+    
+    if [ -n "$CURRENT_VERSION" ]; then
+      echo -e "${YELLOW}Importing secret version...${NC}"
+      if check_state "module.compute.aws_secretsmanager_secret_version.gemini_api_credentials"; then
+        terraform state rm module.compute.aws_secretsmanager_secret_version.gemini_api_credentials
+      fi
+      terraform import "module.compute.aws_secretsmanager_secret_version.gemini_api_credentials" "${GEMINI_SECRET_ARN}|${CURRENT_VERSION}"
+    fi
+  fi
+else
+  echo -e "${YELLOW}Secret doesn't exist, will be created by Terraform${NC}"
+fi
 # ----------------------------------------
 # Lambda Functions
 # ----------------------------------------

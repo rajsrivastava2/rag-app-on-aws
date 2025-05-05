@@ -5,8 +5,8 @@
 set -e
 
 # Default values
-AWS_REGION=${2:-"us-east-1"}
-PROJECT_NAME=${3:-"rag-app-on-aws"}
+AWS_REGION=${2}
+PROJECT_NAME=${3}
 ENV=$1
 
 # Check if environment was provided

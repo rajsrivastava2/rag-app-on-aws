@@ -5,7 +5,7 @@
 # -------------------------
 # Project Settings
 # -------------------------
-project_name = "rag-app-on-aws"
+project_name = "rag-app"
 stage        = "dev"
 aws_region   = "us-east-1"
 
