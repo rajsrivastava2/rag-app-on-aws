@@ -198,7 +198,7 @@ resource "aws_lambda_function" "document_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "${var.project_name}-gemini-api-key"
+      GEMINI_SECRET_NAME       = "${var.project_name}-${var.stage}-gemini-api-key"
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
@@ -237,7 +237,7 @@ resource "aws_lambda_function" "query_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "${var.project_name}-gemini-api-key"
+      GEMINI_SECRET_NAME       = "${var.project_name}${var.stage}-gemini-api-key"
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
