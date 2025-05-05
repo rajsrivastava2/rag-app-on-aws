@@ -74,6 +74,11 @@ else
     echo "Terraform state lock table does not exist. Skipping."
 fi
 
+# Function to handle Windows Git Bash path issues
+fix_path() {
+    echo "$1" | sed 's#^/\([a-zA-Z]\)/#\1:/#' | sed 's#^C:/Program Files/Git##'
+}
+
 # 1. Delete all files in S3 buckets (to allow bucket deletion)
 echo -e "\n${YELLOW}Emptying S3 buckets...${NC}"
 
@@ -98,49 +103,62 @@ for BUCKET in "${BUCKETS[@]}"; do
             continue
         fi
         
-        # Alternative method without jq to list and delete objects and versions
-        echo "Removing all objects and versions..."
-        
-        # For non-terraform buckets, remove everything
-        # First, delete all objects
+        # First, remove all objects using s3 rm
+        echo "Removing all objects..."
         aws s3 rm "s3://${BUCKET}" --recursive --region ${AWS_REGION}
         
-        # Then list all versions and delete them
-        VERSIONS=$(aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION})
+        # Disable bucket versioning first to make cleanup easier
+        echo "Disabling bucket versioning..."
+        aws s3api put-bucket-versioning --bucket ${BUCKET} --versioning-configuration Status=Suspended --region ${AWS_REGION}
         
-        if [[ $USE_JQ == true ]]; then
-            # Extract version IDs and keys using jq
-            echo "$VERSIONS" | jq -r '.Versions[] | .Key + " " + .VersionId' 2>/dev/null | \
-            while read KEY VERSION_ID; do
-                echo "Deleting object: $KEY (version $VERSION_ID)"
-                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-            done
-            
-            # Delete delete markers
-            echo "$VERSIONS" | jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' 2>/dev/null | \
-            while read KEY VERSION_ID; do
-                echo "Deleting delete marker: $KEY (version $VERSION_ID)"
-                aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-            done
-        else
-            # Alternative method using grep and cut
-            VERSION_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "Versions[*].[Key, VersionId]" --output text --region ${AWS_REGION})
-            echo "$VERSION_LIST" | while read -r KEY VERSION_ID; do
-                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
-                    echo "Deleting object: $KEY (version $VERSION_ID)"
-                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+        # Now handle any remaining versions with a more robust approach
+        echo "Removing all object versions..."
+        
+        # Create a temporary file for version processing
+        TEMP_FILE=$(mktemp)
+        
+        # Get all versions including delete markers
+        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} > $TEMP_FILE
+        
+        # Process versions first - handle parsing issues with text processing instead of jq
+        # This approach handles spaces in keys and special characters better
+        if [ -s "$TEMP_FILE" ]; then
+            # Extract version information without jq
+            grep -A 2 '"Key":' $TEMP_FILE | grep -v '\-\-' | 
+            while read -r LINE1 && read -r LINE2; do
+                # Extract key and version ID using pattern matching
+                KEY=$(echo $LINE1 | grep -o '"Key": *"[^"]*"' | cut -d'"' -f4)
+                VERSION=$(echo $LINE2 | grep -o '"VersionId": *"[^"]*"' | cut -d'"' -f4)
+                
+                if [ -n "$KEY" ] && [ -n "$VERSION" ] && [ "$VERSION" != "null" ]; then
+                    echo "Deleting object: $KEY (version $VERSION)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION" --region ${AWS_REGION}
+                elif [ -n "$KEY" ]; then
+                    echo "Deleting object: $KEY (version null)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --region ${AWS_REGION}
                 fi
             done
             
-            # Delete delete markers
-            MARKER_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "DeleteMarkers[*].[Key, VersionId]" --output text --region ${AWS_REGION})
-            echo "$MARKER_LIST" | while read -r KEY VERSION_ID; do
-                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
-                    echo "Deleting delete marker: $KEY (version $VERSION_ID)"
-                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
+            # Now handle delete markers
+            grep -A 2 '"Key":' $TEMP_FILE | grep -B 1 '"DeleteMarker": true' | grep -v '\-\-' |
+            while read -r LINE1 && read -r LINE2; do
+                # Extract key and version ID for delete markers
+                KEY=$(echo $LINE1 | grep -o '"Key": *"[^"]*"' | cut -d'"' -f4)
+                VERSION=$(echo $LINE2 | grep -o '"VersionId": *"[^"]*"' | cut -d'"' -f4)
+                
+                if [ -n "$KEY" ] && [ -n "$VERSION" ]; then
+                    echo "Deleting delete marker: $KEY (version $VERSION)"
+                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION" --region ${AWS_REGION}
                 fi
             done
         fi
+        
+        # Clean up temp file
+        rm -f $TEMP_FILE
+        
+        # Final sweep to make sure everything is gone
+        echo "Final sweep to remove any remaining objects..."
+        aws s3 rm "s3://${BUCKET}" --recursive --region ${AWS_REGION}
     else
         echo "Bucket ${BUCKET} not found or cannot be accessed"
     fi
@@ -186,8 +204,9 @@ LOG_GROUPS=(
 
 for LOG_GROUP in "${LOG_GROUPS[@]}"; do
     echo "Deleting Log Group: $LOG_GROUP"
-    # Fix escaping for Windows Git Bash - use double quotes to prevent path handling issues
-    aws logs delete-log-group --log-group-name "$LOG_GROUP" --region $AWS_REGION || echo "Log Group $LOG_GROUP not found or already deleted"
+    # Fix for Windows Git Bash path issues
+    FIXED_PATH=$(fix_path "$LOG_GROUP")
+    aws logs delete-log-group --log-group-name "$FIXED_PATH" --region $AWS_REGION || echo "Log Group $LOG_GROUP not found or already deleted"
 done
 
 # 5. Delete DynamoDB tables
@@ -315,8 +334,8 @@ for POLICY_ARN in $IAM_POLICIES; do
 done
 
 # 11. Wait for resources to be fully released before trying to delete VPC
-echo -e "\n${YELLOW}Waiting for resources to be fully released (60 seconds)...${NC}"
-sleep 60
+echo -e "\n${YELLOW}Waiting for resources to be fully released (90 seconds)...${NC}"
+sleep 90
 
 # 12. Delete VPC resources in proper order
 echo -e "\n${YELLOW}Finding VPC resources...${NC}"
@@ -331,29 +350,47 @@ fi
 if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     echo "Found VPC: $VPC_ID. Deleting associated resources..."
     
-    # Delete Network Interfaces first
+    # Terminate any EC2 instances in the VPC first
+    INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=vpc-id,Values=$VPC_ID" --query "Reservations[].Instances[].InstanceId" --output text --region $AWS_REGION)
+    if [ -n "$INSTANCE_IDS" ]; then
+        echo "Terminating EC2 instances in the VPC..."
+        aws ec2 terminate-instances --instance-ids $INSTANCE_IDS --region $AWS_REGION || echo "Failed to terminate instances"
+        echo "Waiting for instances to terminate..."
+        aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS --region $AWS_REGION || echo "Failed to wait for instances to terminate"
+    fi
+    
+    # Delete Network Interfaces with proper handling for managed attachments
     echo "Looking for Network Interfaces..."
     ENI_IDS=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
     for ENI_ID in $ENI_IDS; do
         echo "Checking Network Interface: $ENI_ID"
-        # First check if it has any attachment
-        ATTACHMENT=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
-        if [ -n "$ATTACHMENT" ] && [ "$ATTACHMENT" != "None" ]; then
-            ATTACH_TYPE=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
-            # Skip trying to detach managed attachments (like ELB)
-            if [[ $ATTACH_TYPE == ela-attach-* ]]; then
-                echo "Skipping managed attachment: $ATTACHMENT"
-            else
-                echo "Detaching attachment: $ATTACHMENT"
-                aws ec2 detach-network-interface --attachment-id $ATTACHMENT --force --region $AWS_REGION
+        
+        # Get status and attachment info
+        ENI_INFO=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --region $AWS_REGION)
+        STATUS=$(echo "$ENI_INFO" | grep -o '"Status": "[^"]*"' | cut -d'"' -f4)
+        ATTACH_ID=$(echo "$ENI_INFO" | grep -o '"AttachmentId": "[^"]*"' | cut -d'"' -f4)
+        
+        # Skip if in use by a service
+        if [[ "$STATUS" == "in-use" ]]; then
+            # Check if this is a managed attachment
+            if [[ -n "$ATTACH_ID" ]] && [[ "$ATTACH_ID" == ela-attach-* ]]; then
+                echo "Skipping managed attachment: $ATTACH_ID"
+                continue
+            fi
+            
+            # Force detachment if possible
+            if [ -n "$ATTACH_ID" ]; then
+                echo "Attempting to force detach: $ATTACH_ID"
+                aws ec2 detach-network-interface --attachment-id $ATTACH_ID --force --region $AWS_REGION || echo "Could not detach $ATTACH_ID"
                 # Wait for detachment
-                sleep 10
+                echo "Waiting 15 seconds for detachment to complete..."
+                sleep 15
             fi
         fi
         
-        # Try to delete the interface, but continue if we can't
+        # Now try to delete the ENI
         echo "Attempting to delete Network Interface: $ENI_ID"
-        aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Skipping network interface $ENI_ID (might still be in use)"
+        aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Could not delete network interface $ENI_ID (might still be in use)"
     done
     
     # Delete NAT gateways
@@ -365,11 +402,11 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     
     # Wait for NAT gateways to be deleted
     if [ -n "$NAT_GATEWAY_IDS" ]; then
-        echo "Waiting for NAT Gateways to be deleted (up to 120 seconds)..."
-        sleep 120
+        echo "Waiting for NAT Gateways to be deleted (up to 180 seconds)..."
+        sleep 180
     fi
     
-    # Release Elastic IPs
+    # Release Elastic IPs (first list, then release)
     echo "Finding and releasing Elastic IPs associated with the VPC..."
     EIP_ALLOC_IDS=$(aws ec2 describe-addresses --region $AWS_REGION --query "Addresses[].AllocationId" --output text)
     for EIP_ID in $EIP_ALLOC_IDS; do
@@ -385,8 +422,25 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     done
     
     # Wait for endpoints to be fully deleted
-    echo "Waiting for endpoints to be fully deleted (20 seconds)..."
-    sleep 20
+    echo "Waiting for endpoints to be fully deleted (30 seconds)..."
+    sleep 30
+    
+    # Try to clean up remaining dependencies
+    echo "Attempting to clean up remaining network dependencies..."
+    
+    # Find and close any active VPN connections
+    VPN_CONN_IDS=$(aws ec2 describe-vpn-connections --filters "Name=vpc-id,Values=$VPC_ID" --query "VpnConnections[?State!='deleted'].VpnConnectionId" --output text --region $AWS_REGION)
+    for VPN_CONN_ID in $VPN_CONN_IDS; do
+        echo "Deleting VPN Connection: $VPN_CONN_ID"
+        aws ec2 delete-vpn-connection --vpn-connection-id $VPN_CONN_ID --region $AWS_REGION || echo "Failed to delete VPN connection $VPN_CONN_ID"
+    done
+    
+    # Find and delete any VPC peering connections
+    PEERING_IDS=$(aws ec2 describe-vpc-peering-connections --filters "Name=requester-vpc-info.vpc-id,Values=$VPC_ID" --query "VpcPeeringConnections[].VpcPeeringConnectionId" --output text --region $AWS_REGION)
+    for PEER_ID in $PEERING_IDS; do
+        echo "Deleting VPC Peering Connection: $PEER_ID"
+        aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id $PEER_ID --region $AWS_REGION || echo "Failed to delete VPC peering connection $PEER_ID"
+    done
     
     # Delete security groups (except default)
     SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
@@ -402,11 +456,25 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
         aws ec2 delete-network-acl --network-acl-id $NACL_ID --region $AWS_REGION || echo "Failed to delete Network ACL $NACL_ID"
     done
     
-    # Delete subnets
-    SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
-    for SUBNET_ID in $SUBNET_IDS; do
-        echo "Deleting Subnet: $SUBNET_ID"
-        aws ec2 delete-subnet --subnet-id $SUBNET_ID --region $AWS_REGION || echo "Failed to delete subnet $SUBNET_ID"
+    # Retry to delete subnets multiple times with delays
+    for RETRY in {1..3}; do
+        echo "Attempt $RETRY to delete subnets..."
+        SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
+        
+        if [ -z "$SUBNET_IDS" ]; then
+            echo "No subnets found."
+            break
+        fi
+        
+        for SUBNET_ID in $SUBNET_IDS; do
+            echo "Deleting Subnet: $SUBNET_ID"
+            aws ec2 delete-subnet --subnet-id $SUBNET_ID --region $AWS_REGION || echo "Failed to delete subnet $SUBNET_ID"
+        done
+        
+        if [ $RETRY -lt 3 ]; then
+            echo "Waiting 30 seconds before next subnet deletion attempt..."
+            sleep 30
+        fi
     done
     
     # Delete route tables (except the main one)
@@ -434,18 +502,71 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
         aws ec2 delete-internet-gateway --internet-gateway-id $IG_ID --region $AWS_REGION || echo "Failed to delete internet gateway $IG_ID"
     fi
     
-    # Delete any VPC Peering connections
-    PEERING_IDS=$(aws ec2 describe-vpc-peering-connections --filters "Name=requester-vpc-info.vpc-id,Values=$VPC_ID" --query "VpcPeeringConnections[].VpcPeeringConnectionId" --output text --region $AWS_REGION)
-    for PEER_ID in $PEERING_IDS; do
-        echo "Deleting VPC Peering Connection: $PEER_ID"
-        aws ec2 delete-vpc-peering-connection --vpc-peering-connection-id $PEER_ID --region $AWS_REGION || echo "Failed to delete VPC peering connection $PEER_ID"
+    # Wait one last time before trying to delete the VPC
+    echo "Waiting 30 seconds before attempting to delete VPC..."
+    sleep 30
+    
+    # Multiple attempts to delete the VPC
+    for RETRY in {1..3}; do
+        echo "Attempt $RETRY to delete VPC: $VPC_ID"
+        aws ec2 delete-vpc --vpc-id $VPC_ID --region $AWS_REGION
+        
+        # Check if successful
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}VPC successfully deleted!${NC}"
+            break
+        else
+            echo "Failed to delete VPC. Checking remaining dependencies..."
+            
+            # Check for remaining dependencies
+            REMAINING_ENI=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+            REMAINING_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
+            REMAINING_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
+            
+            if [ -n "$REMAINING_ENI" ]; then
+                echo "Remaining network interfaces: $REMAINING_ENI"
+                # Try more aggressively to remove ENIs
+                for ENI_ID in $REMAINING_ENI; do
+                    echo "Force-detaching network interface: $ENI_ID"
+                    ATTACHMENT=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text --region $AWS_REGION)
+                    if [ -n "$ATTACHMENT" ] && [ "$ATTACHMENT" != "None" ]; then
+                        aws ec2 detach-network-interface --attachment-id $ATTACHMENT --force --region $AWS_REGION || echo "Could not detach $ATTACHMENT"
+                        sleep 10
+                    fi
+                    aws ec2 delete-network-interface --network-interface-id $ENI_ID --region $AWS_REGION || echo "Could not delete network interface $ENI_ID"
+                done
+            fi
+            
+            if [ -n "$REMAINING_SG" ]; then
+                echo "Remaining security groups: $REMAINING_SG"
+                for SG_ID in $REMAINING_SG; do
+                    echo "Deleting security group: $SG_ID"
+                    aws ec2 delete-security-group --group-id $SG_ID --region $AWS_REGION || echo "Failed to delete security group $SG_ID"
+                done
+            fi
+            
+            if [ -n "$REMAINING_SUBNETS" ]; then
+                echo "Remaining subnets: $REMAINING_SUBNETS"
+                for SUBNET_ID in $REMAINING_SUBNETS; do
+                    echo "Deleting subnet: $SUBNET_ID"
+                    aws ec2 delete-subnet --subnet-id $SUBNET_ID --region $AWS_REGION || echo "Failed to delete subnet $SUBNET_ID"
+                done
+            fi
+            
+            if [ $RETRY -lt 3 ]; then
+                echo "Waiting 30 seconds before next VPC deletion attempt..."
+                sleep 30
+            fi
+        fi
     done
     
-    # Now delete the VPC
-    echo "Deleting VPC: $VPC_ID"
-    aws ec2 delete-vpc --vpc-id $VPC_ID --region $AWS_REGION || echo "Failed to delete VPC $VPC_ID"
-    
-    echo -e "${GREEN}VPC and related resources deleted (or deletion in progress).${NC}"
+    # Final check if VPC still exists
+    VPC_CHECK=$(aws ec2 describe-vpcs --vpc-ids $VPC_ID --region $AWS_REGION 2>/dev/null || echo "")
+    if [ -z "$VPC_CHECK" ]; then
+        echo -e "${GREEN}VPC and related resources successfully deleted.${NC}"
+    else
+        echo -e "${YELLOW}VPC deletion may have failed. You may need to manually delete VPC $VPC_ID and its dependencies.${NC}"
+    fi
 else
     echo "No VPC found."
 fi
@@ -462,36 +583,72 @@ for BUCKET in "${BUCKETS[@]}"; do
     echo "Deleting bucket: $BUCKET"
     # Check if bucket exists before attempting to delete
     if aws s3api head-bucket --bucket ${BUCKET} --region ${AWS_REGION} 2>/dev/null; then
-        # Try to delete the bucket
-        if aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION; then
-            echo "Successfully deleted bucket: $BUCKET"
-        else
-            echo "Failed to delete bucket: $BUCKET, trying force delete..."
+        # Disable versioning first
+        echo "Disabling bucket versioning..."
+        aws s3api put-bucket-versioning --bucket ${BUCKET} --versioning-configuration Status=Suspended --region ${AWS_REGION}
+        
+        # Empty bucket again completely - ensure it's really empty
+        echo "Final cleanup of bucket contents..."
+        
+        # Remove all objects
+        aws s3 rm s3://${BUCKET} --recursive --region ${AWS_REGION}
+        
+        # Create a temporary file for version processing
+        TEMP_FILE=$(mktemp)
+        
+        # Get all versions and delete markers
+        aws s3api list-object-versions --bucket ${BUCKET} --output json --region ${AWS_REGION} > $TEMP_FILE
+        
+        # Remove all versions with simpler parsing
+        if [ -s "$TEMP_FILE" ]; then
+            # Process versions and delete markers more carefully
+            echo "Processing versions in $BUCKET"
             
-            # Perform a recursive remove to ensure the bucket is empty
+            # First try to use aws s3api delete-objects for bulk deletion (faster)
+            # Create a JSON file for delete-objects
+            DELETE_FILE=$(mktemp)
+            echo '{"Objects":[' > $DELETE_FILE
+            
+            # Add version info
+            grep -A 5 '"Key":' $TEMP_FILE | grep -e '"Key":' -e '"VersionId":' | 
+            while read -r LINE1 && read -r LINE2; do
+                KEY=$(echo $LINE1 | sed -n 's/.*"Key": *"\([^"]*\)".*/\1/p')
+                VERSION=$(echo $LINE2 | sed -n 's/.*"VersionId": *"\([^"]*\)".*/\1/p')
+                
+                if [ -n "$KEY" ] && [ -n "$VERSION" ]; then
+                    echo "{\"Key\":\"$KEY\",\"VersionId\":\"$VERSION\"}," >> $DELETE_FILE
+                fi
+            done
+            
+            # Finalize JSON
+            # Remove last comma and add closing brackets
+            sed -i '$ s/,$//' $DELETE_FILE 2>/dev/null || sed -i '' '$ s/,$//' $DELETE_FILE
+            echo ']}' >> $DELETE_FILE
+            
+            # Use bulk delete if we have objects
+            if [ $(wc -l < $DELETE_FILE) -gt 3 ]; then
+                echo "Bulk deleting objects..."
+                aws s3api delete-objects --bucket ${BUCKET} --delete file://$DELETE_FILE --region ${AWS_REGION} || echo "Bulk delete failed, trying individual deletion"
+            else
+                echo "No versions found for bulk deletion"
+            fi
+            
+            # Fallback to individual deletion for any remaining objects
+            echo "Checking for any remaining objects..."
             aws s3 rm s3://${BUCKET} --recursive --region ${AWS_REGION}
             
-            # Remove all object versions and delete markers without jq
-            VERSIONS_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "Versions[*].[Key, VersionId]" --output text --region ${AWS_REGION})
-            echo "$VERSIONS_LIST" | while read -r KEY VERSION_ID; do
-                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
-                    echo "Deleting object: $KEY (version $VERSION_ID)"
-                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-                fi
-            done
-            
-            # Delete delete markers
-            MARKERS_LIST=$(aws s3api list-object-versions --bucket ${BUCKET} --query "DeleteMarkers[*].[Key, VersionId]" --output text --region ${AWS_REGION})
-            echo "$MARKERS_LIST" | while read -r KEY VERSION_ID; do
-                if [ -n "$KEY" ] && [ -n "$VERSION_ID" ]; then
-                    echo "Deleting delete marker: $KEY (version $VERSION_ID)"
-                    aws s3api delete-object --bucket ${BUCKET} --key "$KEY" --version-id "$VERSION_ID" --region ${AWS_REGION}
-                fi
-            done
-            
-            # Try to delete the bucket one more time
-            echo "Attempting to delete bucket again: $BUCKET"
-            aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION || echo "Failed to delete bucket $BUCKET even after removing all objects"
+            # Clean up temp files
+            rm -f $DELETE_FILE
+        fi
+        
+        rm -f $TEMP_FILE
+        
+        # Try to delete the bucket
+        echo "Attempting to delete bucket: $BUCKET"
+        if aws s3api delete-bucket --bucket $BUCKET --region $AWS_REGION; then
+            echo -e "${GREEN}Successfully deleted bucket: $BUCKET${NC}"
+        else
+            echo -e "${YELLOW}Failed to delete bucket: $BUCKET. You may need to delete it manually.${NC}"
         fi
     else
         echo "Bucket $BUCKET does not exist or cannot be accessed"
@@ -505,8 +662,80 @@ echo "state files for other environments. Only the ${STAGE} folder was cleaned."
 echo "If you want to delete the entire bucket, you can run:"
 echo "aws s3 rb s3://${PROJECT_NAME}-terraform-state --force"
 
+# 14. Final verification and reporting
+echo -e "\n${YELLOW}Performing final verification...${NC}"
+
+# Check if any Lambda functions still exist
+REMAINING_LAMBDAS=$(aws lambda list-functions --query "Functions[?starts_with(FunctionName, '${PROJECT_NAME}-${STAGE}')].FunctionName" --output text --region $AWS_REGION)
+if [ -n "$REMAINING_LAMBDAS" ]; then
+    echo -e "${YELLOW}Some Lambda functions may still exist:${NC}"
+    echo "$REMAINING_LAMBDAS"
+    echo "You may need to manually delete these functions."
+fi
+
+# Check if any CloudWatch log groups still exist
+FIXED_PATH="/aws/lambda/${PROJECT_NAME}-${STAGE}"
+FIXED_PATH=$(fix_path "$FIXED_PATH")
+REMAINING_LOGS=$(aws logs describe-log-groups --log-group-name-prefix "$FIXED_PATH" --query "logGroups[*].logGroupName" --output text --region $AWS_REGION 2>/dev/null || echo "")
+if [ -n "$REMAINING_LOGS" ]; then
+    echo -e "${YELLOW}Some CloudWatch log groups may still exist:${NC}"
+    echo "$REMAINING_LOGS"
+    echo "You may need to manually delete these log groups."
+fi
+
+# Check if RDS instance still exists
+RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier "${PROJECT_NAME}-${STAGE}-postgres" --query "DBInstances[0].DBInstanceStatus" --output text --region $AWS_REGION 2>/dev/null || echo "")
+if [ -n "$RDS_STATUS" ] && [ "$RDS_STATUS" != "None" ]; then
+    echo -e "${YELLOW}RDS instance ${PROJECT_NAME}-${STAGE}-postgres still exists with status: $RDS_STATUS${NC}"
+    echo "It might be in the process of being deleted. Please check the AWS Console."
+fi
+
+# Check if VPC still exists
+if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
+    VPC_EXISTS=$(aws ec2 describe-vpcs --vpc-ids $VPC_ID --query "Vpcs[0].VpcId" --output text --region $AWS_REGION 2>/dev/null || echo "")
+    if [ -n "$VPC_EXISTS" ] && [ "$VPC_EXISTS" != "None" ]; then
+        echo -e "${YELLOW}VPC $VPC_ID still exists${NC}"
+        echo "It might have dependencies that prevent deletion. Here are some possible dependencies:"
+        
+        # Check for remaining ENIs
+        REMAINING_ENIS=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$VPC_ID" --query "NetworkInterfaces[*].NetworkInterfaceId" --output text --region $AWS_REGION)
+        if [ -n "$REMAINING_ENIS" ]; then
+            echo "- Network Interfaces: $REMAINING_ENIS"
+        fi
+        
+        # Check for remaining security groups
+        REMAINING_SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --query "SecurityGroups[*].GroupId" --output text --region $AWS_REGION)
+        if [ -n "$REMAINING_SGS" ]; then
+            echo "- Security Groups: $REMAINING_SGS"
+        fi
+        
+        echo "You may need to manually delete these resources before deleting the VPC."
+    fi
+fi
+
+# Check if S3 buckets still exist
+for BUCKET in "${BUCKETS[@]}"; do
+    if aws s3api head-bucket --bucket ${BUCKET} --region ${AWS_REGION} 2>/dev/null; then
+        echo -e "${YELLOW}S3 bucket ${BUCKET} still exists${NC}"
+        echo "You may need to manually delete it using the AWS console or CLI."
+    fi
+done
+
 echo -e "\n${GREEN}==================================================${NC}"
-echo -e "${GREEN}    Cleanup Complete!                             ${NC}"
+echo -e "${GREEN}    Cleanup Process Completed                     ${NC}"
 echo -e "${GREEN}==================================================${NC}"
-echo -e "${YELLOW}Note: Some resources may take time to fully delete.${NC}"
+echo -e "${YELLOW}Resources that were targeted for deletion:${NC}"
+echo "- API Gateway: ${PROJECT_NAME}-${STAGE}-api"
+echo "- Lambda functions for ${PROJECT_NAME}-${STAGE}"
+echo "- CloudWatch log groups for ${PROJECT_NAME}-${STAGE}"
+echo "- DynamoDB tables: ${PROJECT_NAME}-${STAGE}-metadata, ${PROJECT_NAME}-${STAGE}-terraform-state-lock" 
+echo "- RDS PostgreSQL instance: ${PROJECT_NAME}-${STAGE}-postgres"
+echo "- Cognito User Pool: ${PROJECT_NAME}-${STAGE}-user-pool"
+echo "- Secrets: ${PROJECT_NAME}-${STAGE}-db-credentials, ${PROJECT_NAME}-${STAGE}-gemini-api-key"
+echo "- SNS Topics: ${PROJECT_NAME}-${STAGE}-alerts"
+echo "- IAM roles and policies for ${PROJECT_NAME}-${STAGE}"
+echo "- VPC and related resources for ${PROJECT_NAME}-${STAGE}"
+echo "- S3 buckets: ${PROJECT_NAME}-${STAGE}-documents, ${PROJECT_NAME}-${STAGE}-lambda-code"
+echo "- ${STAGE} folder in ${PROJECT_NAME}-terraform-state bucket"
+echo -e "\n${YELLOW}Note: Some resources may take time to fully delete.${NC}"
 echo -e "${YELLOW}Check the AWS Console to verify all resources have been removed.${NC}"
