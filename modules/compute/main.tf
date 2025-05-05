@@ -38,8 +38,7 @@ resource "aws_secretsmanager_secret" "gemini_api_credentials" {
 resource "aws_secretsmanager_secret_version" "gemini_api_credentials" {
   secret_id = aws_secretsmanager_secret.gemini_api_credentials.id
   secret_string = jsonencode({
-    api_key     = var.gemini_api_key
-    api_secret  = var.gemini_api_secret
+    GEMINI_API_KEY    = var.gemini_api_key
   })
 }
 
