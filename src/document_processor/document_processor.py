@@ -34,7 +34,7 @@ secretsmanager = boto3.client('secretsmanager')
 DOCUMENTS_BUCKET = os.environ.get('DOCUMENTS_BUCKET')
 METADATA_TABLE = os.environ.get('METADATA_TABLE')
 DB_SECRET_ARN = os.environ.get('DB_SECRET_ARN')
-GEMINI_SECRET_NAME = os.environ.get('GEMINI_SECRET_NAME')
+GEMINI_SECRET_ARN = os.environ.get('GEMINI_SECRET_ARN')
 STAGE = os.environ.get('STAGE')
 
 GEMINI_EMBEDDING_MODEL = os.environ.get('GEMINI_EMBEDDING_MODEL')
@@ -51,7 +51,7 @@ def get_gemini_api_key():
     """
     try:
         secret_response = secretsmanager.get_secret_value(
-            SecretId=GEMINI_SECRET_NAME
+            SecretId=GEMINI_SECRET_ARN
         )
         secret = json.loads(secret_response['SecretString'])
         return secret['GEMINI_API_KEY']

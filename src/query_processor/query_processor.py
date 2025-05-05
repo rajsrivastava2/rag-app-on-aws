@@ -25,7 +25,7 @@ DOCUMENTS_BUCKET = os.environ.get('DOCUMENTS_BUCKET')
 METADATA_TABLE = os.environ.get('METADATA_TABLE')
 STAGE = os.environ.get('STAGE')
 DB_SECRET_ARN = os.environ.get('DB_SECRET_ARN')
-GEMINI_SECRET_NAME = os.environ.get('GEMINI_SECRET_NAME')
+GEMINI_SECRET_ARN = os.environ.get('GEMINI_SECRET_ARN')
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL')
 GEMINI_EMBEDDING_MODEL = os.environ.get('GEMINI_EMBEDDING_MODEL')
 TEMPERATURE = float(os.environ.get('TEMPERATURE'))
@@ -36,7 +36,7 @@ TOP_P = float(os.environ.get('TOP_P'))
 # Get Gemini API key from Secrets Manager
 def get_gemini_api_key():
     try:
-        response = secretsmanager.get_secret_value(SecretId=GEMINI_SECRET_NAME)
+        response = secretsmanager.get_secret_value(SecretId=GEMINI_SECRET_ARN)
         return json.loads(response['SecretString'])['GEMINI_API_KEY']
     except Exception as e:
         logger.error(f"Error fetching Gemini API key: {str(e)}")

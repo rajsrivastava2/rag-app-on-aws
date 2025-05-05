@@ -3,6 +3,47 @@
 # ===============================
 
 # =========================
+# Locals
+# =========================
+
+locals {
+  name                    = "${var.project_name}-${var.stage}" 
+  document_processor_name = "${var.project_name}-${var.stage}-document-processor"
+  query_processor_name    = "${var.project_name}-${var.stage}-query-processor"
+  upload_handler_name     = "${var.project_name}-${var.stage}-upload-handler"
+  db_init_name            = "${var.project_name}-${var.stage}-db-init"
+  auth_handler_name       = "${var.project_name}-${var.stage}-auth-handler"
+  
+  common_tags = {
+    Project     = var.project_name
+    Environment = var.stage
+    ManagedBy   = "Terraform"
+  }
+}
+
+# ===================================================================
+# Store GEMINI_API_KEY credentials placeholder in AWS Secrets Manager
+# ===================================================================
+
+resource "aws_secretsmanager_secret" "gemini_api_credentials" {
+  name        = "${local.name}-gemini-api-key"
+  description = "Gemini API Key for ${local.name}"
+
+  tags = {
+    Name        = "${local.name}-gemini-api-key"
+    Environment = var.stage
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "gemini_api_credentials" {
+  secret_id = aws_secretsmanager_secret.gemini_api_credentials.id
+  secret_string = jsonencode({
+    api_key     = var.gemini_api_key
+    api_secret  = var.gemini_api_secret
+  })
+}
+
+# =========================
 # IAM Role and Policy
 # =========================
 
@@ -80,10 +121,10 @@ resource "aws_iam_policy" "lambda_policy" {
       {
         Effect = "Allow",
         Action = ["secretsmanager:GetSecretValue"],
-        Resource = var.db_secret_arn != "" ? [
+        Resource = [
           var.db_secret_arn,
-          "arn:aws:secretsmanager:${var.aws_region}:*:secret:${var.project_name}-gemini-api-key*"
-        ] : ["arn:aws:secretsmanager:${var.aws_region}:*:secret:${var.project_name}-gemini-api-key*"]
+          aws_secretsmanager_secret.gemini_api_credentials.arn
+        ]
       },
       {
         Effect = "Allow",
@@ -110,24 +151,6 @@ resource "aws_iam_policy" "lambda_policy" {
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_policy.arn
-}
-
-# =========================
-# Locals
-# =========================
-
-locals {
-  document_processor_name = "${var.project_name}-${var.stage}-document-processor"
-  query_processor_name    = "${var.project_name}-${var.stage}-query-processor"
-  upload_handler_name     = "${var.project_name}-${var.stage}-upload-handler"
-  db_init_name            = "${var.project_name}-${var.stage}-db-init"
-  auth_handler_name       = "${var.project_name}-${var.stage}-auth-handler"
-  
-  common_tags = {
-    Project     = var.project_name
-    Environment = var.stage
-    ManagedBy   = "Terraform"
-  }
 }
 
 # =========================
@@ -198,7 +221,7 @@ resource "aws_lambda_function" "document_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "${var.project_name}-${var.stage}-gemini-api-key"
+      GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
@@ -237,7 +260,7 @@ resource "aws_lambda_function" "query_processor" {
       METADATA_TABLE           = var.metadata_table
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_NAME       = "${var.project_name}${var.stage}-gemini-api-key"
+      GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
       GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
@@ -349,3 +372,4 @@ resource "aws_s3_bucket_notification" "bucket_notification" {
 
   depends_on = [aws_lambda_permission.s3_invoke_lambda_document_processor]
 }
+

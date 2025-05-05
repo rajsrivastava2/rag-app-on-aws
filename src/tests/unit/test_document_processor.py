@@ -10,7 +10,7 @@ os.environ["DOCUMENTS_BUCKET"] = "test-bucket"
 os.environ["METADATA_TABLE"] = "test-table"
 os.environ["STAGE"] = "test"
 os.environ["DB_SECRET_ARN"] = "test-db-secret"
-os.environ["GEMINI_SECRET_NAME"] = "test-gemini-secret"
+os.environ["GEMINI_SECRET_ARN"] = "test-gemini-secret"
 os.environ["GEMINI_EMBEDDING_MODEL"] = "test-embedding-model"
 os.environ["TEMPERATURE"] = "0.2"
 os.environ["MAX_OUTPUT_TOKENS"] = "1024"
@@ -49,7 +49,7 @@ class TestDocumentProcessor(unittest.TestCase):
         # Clean up environment variables
         for key in [
             "DOCUMENTS_BUCKET", "METADATA_TABLE", "STAGE", "DB_SECRET_ARN",
-            "GEMINI_SECRET_NAME", "GEMINI_EMBEDDING_MODEL", "TEMPERATURE",
+            "GEMINI_SECRET_ARN", "GEMINI_EMBEDDING_MODEL", "TEMPERATURE",
             "MAX_OUTPUT_TOKENS", "TOP_K", "TOP_P", "SIMILARITY_THRESHOLD"
         ]:
             if key in os.environ:

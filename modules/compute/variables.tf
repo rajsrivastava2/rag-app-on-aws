@@ -91,6 +91,18 @@ variable "gemini_embedding_model" {
   default     = "text-embedding-004"
 }
 
+variable "gemini_api_key" {
+  description = "Google's Gemini API Key"
+  type        = string
+  default     = "GEMINI_API_KEY"
+}
+
+variable "gemini_api_secret" {
+  description = "Google's Gemini API Secret. Need to be updated at AWS Secret Manager Console"
+  type        = string
+  default     = "PLACE_HOLDER"
+}
+
 variable "max_retries" {
   description = "Max Retry"
   type        = number
