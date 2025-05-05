@@ -283,7 +283,7 @@ jobs:
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
           chmod +x ../../scripts/import_resources.sh
-          ../../scripts/import_resources.sh "$PROJECT_NAME" "$STAGE" "$AWS_REGION" || true
+          ../../scripts/import_resources.sh "$PROJECT_NAME" "$STAGE" "$AWS_REGION" > /dev/null 2>&1 || true
       
       - name: Terraform Plan
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}

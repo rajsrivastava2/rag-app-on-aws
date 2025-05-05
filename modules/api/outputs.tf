@@ -1,7 +1,7 @@
 #API Module
 output "api_endpoint" {
   description = "URL of the API endpoint"
-  value       = "${aws_api_gateway_deployment.main.invoke_url}${var.stage}"
+  value       = aws_api_gateway_stage.main.invoke_url
 }
 
 output "api_id" {

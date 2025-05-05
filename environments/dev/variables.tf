@@ -58,6 +58,12 @@ variable "bastion_allowed_cidr" {
   default     = ["0.0.0.0/0"]  # Should be restricted to your company IP range in production
 }
 
+variable "create_bastion_sg" {
+  description = "Create a security group for bastion hosts"
+  type        = bool
+  default     = false
+}
+
 # -------------------------
 # Database Configuration
 # -------------------------
@@ -140,4 +146,19 @@ variable "documents_bucket_name" {
   description = "Name of the S3 bucket for documents (used in prod dashboards)"
   type        = string
   default     = ""
+}
+
+# -------------------------
+# GitHub Repo
+# -------------------------
+variable "github_repo" {
+  description = "GitHub Repo Name"
+  type        = string
+  default     = "genieincodebottle/rag-app-on-aws"
+}
+
+variable "github_branch" {
+  description = "GitHub Branch"
+  type        = string
+  default     = "develop"
 }
