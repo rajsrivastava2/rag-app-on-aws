@@ -1,8 +1,8 @@
 # RAG Infrastructure on AWS
 
-Terraform-based Infrastructure as Code (IaC) for deploying the complete AWS infrastructure required by the [RAG Application](https://github.com/genieincodebottle/rag-app-on-aws-ui).
+Terraform-based Infrastructure as Code (IaC) for deploying the complete AWS infrastructure with backend codes required by the [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui).
 
-![Infrastructure Diagram](https://via.placeholder.com/800x400?text=RAG+Infrastructure+Diagram)
+[Infra Provisioning Lifecycle Flow](https://github.com/genieincodebottle/rag-app-n-aws/blob/main/images/infra_provisioning_sequence.png)
 
 I’ll break this down in a YouTube video soon, coming in a few days.
 
@@ -62,6 +62,8 @@ The following AWS resources are provisioned and managed:
 ├── .github/workflows/       # GitHub Actions CI/CD pipeline
 ├── environments/            # Environment-specific configurations
 │   └── dev/                 # Development environment
+│   └── staging/             # Staging environment
+    └── prod/                # Prod environment
 ├── modules/                 # Reusable Terraform modules
 │   ├── api/                 # API Gateway configuration
 │   ├── auth/                # Cognito authentication
@@ -73,6 +75,9 @@ The following AWS resources are provisioned and managed:
 ├── scripts/                 # Utility scripts
 └── src/                     # Lambda function source code
 ```
+
+To deploy the project with your own unique project name on AWS, change the project_name in environments/<stage>/terraform.tfvars.
+This avoids errors from S3 bucket and ther resources name conflicts if the default name "rag-app" is already in use.
 
 ## Prerequisites
 
