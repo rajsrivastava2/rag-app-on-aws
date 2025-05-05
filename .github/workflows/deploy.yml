@@ -257,15 +257,7 @@ jobs:
         with:
           name: lambda-artifacts
           path: lambda_artifacts/
-      
-      - name: Copy Lambda Artifacts to Environment Directory
-        run: |
-          # Create the directory structure
-          mkdir -p environments/$STAGE/lambda_artifacts/
-          
-          # Copy lambda artifacts to the environment directory
-          cp -v lambda_artifacts/*.zip environments/$STAGE/lambda_artifacts/
-      
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
@@ -343,21 +335,13 @@ jobs:
       - name: Upload Lambda ZIP files to S3
         run: |
           LAMBDA_BUCKET_NAME="${PROJECT_NAME}-${STAGE}-lambda-code"
-          
-          # Ensure lambda code bucket exists
-          if aws s3api head-bucket --bucket ${LAMBDA_BUCKET_NAME} 2>/dev/null; then
-            echo "Lambda code bucket exists, uploading Lambda code..."
-            
-            # Upload Lambda code to S3 bucket
-            for LAMBDA_ZIP in lambda_artifacts/*.zip; do
-              FILENAME=$(basename $LAMBDA_ZIP)
-              aws s3 cp $LAMBDA_ZIP s3://${LAMBDA_BUCKET_NAME}/lambda/$FILENAME
-            done
-            
-            echo "Lambda code uploaded to S3"
-          else
-            echo "Lambda code bucket doesn't exist yet, will be created by Terraform"
-          fi
+          aws s3api head-bucket --bucket ${LAMBDA_BUCKET_NAME} 2>/dev/null || aws s3api create-bucket --bucket ${LAMBDA_BUCKET_NAME} --region ${AWS_REGION}
+      
+          # Ensure "lambda/" prefix exists in S3 bucket.
+          for LAMBDA_ZIP in lambda_artifacts/*.zip; do
+            FILENAME=$(basename $LAMBDA_ZIP)
+            aws s3 cp $LAMBDA_ZIP s3://${LAMBDA_BUCKET_NAME}/lambda/$FILENAME
+          done
       
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
