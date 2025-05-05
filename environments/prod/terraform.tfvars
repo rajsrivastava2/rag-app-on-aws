@@ -19,7 +19,7 @@ vpc_cidr   = "10.0.0.0/16"
 az_count   = 2
 # Added VPC settings
 single_nat_gateway  = false  # Cost saving for dev environment
-enable_flow_logs    = false  
+enable_flow_logs    = true  
 create_bastion_sg   = false  # Useful for dev environment
 bastion_allowed_cidr = ["0.0.0.0/0"]  # Restrict this in production
 
