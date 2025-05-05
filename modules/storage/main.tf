@@ -63,7 +63,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "documents" {
     id = "archive-old-documents"
     status = "Enabled"
     
-    filter {}  # applies lifecycle to entire bucket
+    filter {
+      prefix = ""  # applies lifecycle rule to entire bucket
+    }
+
     
     transition {
       days = 90

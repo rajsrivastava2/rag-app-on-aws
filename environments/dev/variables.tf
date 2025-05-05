@@ -52,6 +52,18 @@ variable "az_count" {
   default     = 2
 }
 
+variable "single_nat_gateway" {
+  description = "NAT Gateway to use"
+  type        = bool
+  default     = true
+}
+
+variable "enable_flow_logs" {
+  description = "Enable flow log"
+  type        = bool
+  default     = false
+}
+
 variable "bastion_allowed_cidr" {
   description = "CIDR blocks allowed to connect to bastion hosts"
   type        = list(string)
@@ -61,7 +73,7 @@ variable "bastion_allowed_cidr" {
 variable "create_bastion_sg" {
   description = "Create a security group for bastion hosts"
   type        = bool
-  default     = false
+  default     = true
 }
 
 # -------------------------
