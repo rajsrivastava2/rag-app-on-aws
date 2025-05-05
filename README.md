@@ -207,6 +207,21 @@ The `scripts/` directory contains utility scripts:
 - **import_resources.sh**: Imports existing resources into Terraform state
 - **network-diagnostics.sh**: Troubleshoots VPC and connectivity issues
 
+## Uninstallation
+
+To remove all AWS resources provisioned by this project, a cleanup script is provided:
+
+1. Navigate to the scripts directory:
+   ```bash
+   cd scripts
+   chmod +x cleanup.sh
+   ./cleanup.sh
+   ```
+   
+## Related Projects
+
+- [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui): The Streamlit web application that uses this infrastructure
+
 ## Contributing
 
 Contributions to this project are welcome! Please follow these steps:
@@ -216,10 +231,6 @@ Contributions to this project are welcome! Please follow these steps:
 3. Commit your changes (`git commit -m 'Add some amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
-## Related Projects
-
-- [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui): The Streamlit web application that uses this infrastructure
 
 ---
 
