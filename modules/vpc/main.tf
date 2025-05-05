@@ -167,6 +167,28 @@ resource "aws_route_table_association" "private" {
 # VPC Flow Logs
 # =========================
 
+resource "aws_iam_role" "flow_logs" {
+  name = "${var.project_name}-${var.stage}-flow-logs-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "flow_logs" {
+  role       = aws_iam_role.flow_logs.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
 resource "aws_cloudwatch_log_group" "flow_log" {
   count             = var.enable_flow_logs ? 1 : 0
   name              = "/aws/vpc/flowlogs/${local.name}"
@@ -179,6 +201,7 @@ resource "aws_flow_log" "main" {
   count                = var.enable_flow_logs ? 1 : 0
   log_destination      = aws_cloudwatch_log_group.flow_log[0].arn
   log_destination_type = "cloud-watch-logs"
+  iam_role_arn         = aws_iam_role.flow_logs.arn
   traffic_type         = "ALL"
   vpc_id               = aws_vpc.main.id
 
