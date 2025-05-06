@@ -1,6 +1,7 @@
 ## End-to-End RAG Infrastructure & Backend on AWS
 
-**Terraform-based Infrastructure as Code (IaC)** for deploying complete AWS infrastructure and backend services.  
+**Terraform-based Infrastructure as Code (IaC)** for deploying complete AWS backend services, integrated with Google's free-tier Gemini Pro and Gemini Embedding models for AI powered document querying.
+
 Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **use the cleanup script** in the `scripts` folder once you're done.
 
 👉 Related UI: [rag-app-on-aws-ui](https://github.com/genieincodebottle/rag-app-on-aws-ui)  
@@ -83,7 +84,8 @@ This avoids name conflicts (e.g., with S3 buckets).
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
   - `SONAR_TOKEN` (optional - for quality gate)
-
+– Google API Key (for free-tier Gemini Pro & Embedding models)
+   → [Get your API key from Google AI Studio](https://aistudio.google.com/apikey)
 ---
 
 ### 🚀 Deployment
