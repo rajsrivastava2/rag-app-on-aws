@@ -10,23 +10,6 @@ Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **u
 
 ---
 
-### 📚 Table of Contents
-
-- [Overview](#overview)
-- [Flow Diagram](#flow-diagram)
-- [Infrastructure Components](#infrastructure-components)
-- [Repository Structure](#repository-structure)
-- [Prerequisites](#prerequisites)
-- [Deployment](#deployment)
-- [CI/CD Pipeline](#cicd-pipeline)
-- [Environment Management](#environment-management)
-- [Utilities](#utilities)
-- [Uninstallation](#uninstallation)
-- [Related UI](#related-ui)
-- [Contributing](#contributing)
-
----
-
 ### 🔍 Overview
 
 This repository contains the complete Terraform codebase for provisioning and managing the AWS infrastructure that powers the **RAG (Retrieval-Augmented Generation)** application.
