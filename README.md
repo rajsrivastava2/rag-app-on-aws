@@ -30,7 +30,6 @@ Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **u
 ### 🔍 Overview
 
 This repository contains the complete Terraform codebase for provisioning and managing the AWS infrastructure that powers the **RAG (Retrieval-Augmented Generation)** application.
-
 It includes:
 - Backend Lambda functions (upload, document processing, query handling)
 - Unit and integration tests  
