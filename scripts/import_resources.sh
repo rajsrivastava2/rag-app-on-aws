@@ -103,6 +103,7 @@ fi
 SECURITY_GROUPS=(
   "bastion:module.vpc.aws_security_group.bastion[0]"
   "lambda:module.vpc.aws_security_group.lambda"
+  "db:module.vpc.aws_security_group.database"
 )
 
 for SG_ITEM in "${SECURITY_GROUPS[@]}"; do
