@@ -42,6 +42,7 @@ jobs:
                     
   cleanup:
     runs-on: ubuntu-latest
+    needs: [determine_environment]
     environment: ${{ needs.determine_environment.outputs.environment }}
     env:
       PROJECT_NAME: ${{ needs.determine_environment.outputs.project_name }}
