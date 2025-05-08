@@ -44,6 +44,7 @@ function check_state() {
 # ----------------------------------------
 # VPC Resources
 # ----------------------------------------
+
 VPC_NAME="${PROJECT_NAME}-${STAGE}-vpc"
 
 echo -e "${YELLOW}Checking VPC: ${VPC_NAME}${NC}"
@@ -65,7 +66,10 @@ else
   echo -e "${YELLOW}VPC doesn't exist, will be created by Terraform${NC}"
 fi
 
+# ----------------------------------------
 # Import VPC Endpoints if they exist
+# ----------------------------------------
+
 echo -e "${YELLOW}Checking VPC Endpoints...${NC}"
 S3_ENDPOINT_ID=$(aws ec2 describe-vpc-endpoints --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.${REGION}.s3" --query "VpcEndpoints[0].VpcEndpointId" --output text --region "${REGION}" 2>/dev/null)
 
@@ -81,6 +85,10 @@ if [ "$S3_ENDPOINT_ID" != "None" ] && [ -n "$S3_ENDPOINT_ID" ]; then
 else
   echo -e "${YELLOW}S3 VPC Endpoint doesn't exist, will be created by Terraform${NC}"
 fi
+
+# ----------------------------------------
+# Import DynamoDB Endpoints if they exist
+# ----------------------------------------
 
 DYNAMODB_ENDPOINT_ID=$(aws ec2 describe-vpc-endpoints --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.${REGION}.dynamodb" --query "VpcEndpoints[0].VpcEndpointId" --output text --region "${REGION}" 2>/dev/null)
 
@@ -244,6 +252,7 @@ fi
 # ----------------------------------------
 # Secrets Manager
 # ----------------------------------------
+
 DB_SECRET_NAME="${PROJECT_NAME}-${STAGE}-db-credentials"
 
 echo -e "${YELLOW}Checking Secrets Manager secret: ${DB_SECRET_NAME}${NC}"
@@ -301,9 +310,11 @@ if [ -n "$GEMINI_SECRET_ARN" ] && [ "$GEMINI_SECRET_ARN" != "None" ]; then
 else
   echo -e "${YELLOW}Secret doesn't exist, will be created by Terraform${NC}"
 fi
+
 # ----------------------------------------
 # Lambda Functions
 # ----------------------------------------
+
 LAMBDA_FUNCTIONS=(
   "${PROJECT_NAME}-${STAGE}-document-processor:module.compute.aws_lambda_function.document_processor"
   "${PROJECT_NAME}-${STAGE}-query-processor:module.compute.aws_lambda_function.query_processor"
@@ -333,6 +344,7 @@ done
 # ----------------------------------------
 # IAM Role
 # ----------------------------------------
+
 ROLE_NAME="${PROJECT_NAME}-${STAGE}-lambda-role"
 
 echo -e "${YELLOW}Checking IAM role: ${ROLE_NAME}${NC}"
@@ -352,6 +364,7 @@ fi
 # ----------------------------------------
 # IAM Policy
 # ----------------------------------------
+
 POLICY_NAME="${PROJECT_NAME}-${STAGE}-lambda-policy"
 # Get the policy ARN
 POLICY_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='${POLICY_NAME}'].Arn" --output text)
@@ -372,6 +385,7 @@ fi
 # ----------------------------------------
 # API Gateway - Updated to handle REST API Gateway
 # ----------------------------------------
+
 API_NAME="${PROJECT_NAME}-${STAGE}-api"
 
 # Use the AWS CLI to get the API Gateway ID for REST API
@@ -401,6 +415,7 @@ fi
 # ----------------------------------------
 # CloudWatch Logs
 # ----------------------------------------
+
 LOG_GROUPS=(
   "/aws/lambda/${PROJECT_NAME}-${STAGE}-document-processor:module.monitoring.aws_cloudwatch_log_group.document_processor"
   "/aws/lambda/${PROJECT_NAME}-${STAGE}-query-processor:module.monitoring.aws_cloudwatch_log_group.query_processor"
@@ -432,6 +447,7 @@ done
 # ----------------------------------------
 # SNS Topic
 # ----------------------------------------
+
 TOPIC_NAME="${PROJECT_NAME}-${STAGE}-alerts"
 
 # List all SNS topics and filter by name
@@ -503,7 +519,10 @@ for ALARM_ITEM in "${ALARMS[@]}"; do
   fi
 done
 
+# ----------------------------------------
 # Lambda Code Bucket
+# ----------------------------------------
+
 LAMBDA_CODE_BUCKET="${PROJECT_NAME}-${STAGE}-lambda-code"
 
 echo -e "${YELLOW}Checking S3 bucket: ${LAMBDA_CODE_BUCKET}${NC}"
@@ -533,6 +552,7 @@ fi
 # ----------------------------------------
 # Cognito Resources
 # ----------------------------------------
+
 USER_POOL_NAME="${PROJECT_NAME}-${STAGE}-user-pool"
 COGNITO_DOMAIN="${PROJECT_NAME}-${STAGE}-auth"
 APP_CLIENT_NAME="${PROJECT_NAME}-${STAGE}-streamlit-client"
