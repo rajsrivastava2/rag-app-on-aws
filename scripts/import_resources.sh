@@ -405,15 +405,15 @@ LOG_GROUPS=(
   "/aws/lambda/${PROJECT_NAME}-${STAGE}-document-processor:module.monitoring.aws_cloudwatch_log_group.document_processor"
   "/aws/lambda/${PROJECT_NAME}-${STAGE}-query-processor:module.monitoring.aws_cloudwatch_log_group.query_processor"
   "/aws/lambda/${PROJECT_NAME}-${STAGE}-upload-handler:module.monitoring.aws_cloudwatch_log_group.upload_handler"
-  "/aws/lambda/${PROJECT_NAME}-${STAGE}-db-init:module.monitoring.aws_cloudwatch_log_group.db_init"
-  "/aws/lambda/${PROJECT_NAME}-${STAGE}-auth-handler:module.monitoring.aws_cloudwatch_log_group.auth_handler" 
-  "/aws/apigateway/${API_NAME}:module.api.aws_cloudwatch_log_group.api_gateway"
+  "/aws/lambda/${PROJECT_NAME}-${STAGE}-auth-handler:module.monitoring.aws_cloudwatch_log_group.auth_handler"
+  "/aws/lambda/${PROJECT_NAME}-${STAGE}-db-init:module.monitoring.aws_cloudwatch_log_group.auth_handler"
+  "/aws/apigateway/${PROJECT_NAME}-${STAGE}-api:module.api.aws_cloudwatch_log_group.api_gateway"
 )
 
 for LOG_ITEM in "${LOG_GROUPS[@]}"; do
   LOG_NAME=$(echo $LOG_ITEM | cut -d':' -f1)
   LOG_STATE=$(echo $LOG_ITEM | cut -d':' -f2)
-  
+
   echo -e "${YELLOW}Checking CloudWatch log group: ${LOG_NAME}${NC}"
   if aws logs describe-log-groups --log-group-name "${LOG_NAME}" --region "${REGION}" --query "logGroups[0].logGroupName" --output text 2>/dev/null | grep -q "${LOG_NAME}"; then
     echo -e "${GREEN}Log group exists, checking state...${NC}"
@@ -428,26 +428,6 @@ for LOG_ITEM in "${LOG_GROUPS[@]}"; do
     echo -e "${YELLOW}Log group doesn't exist, will be created by Terraform${NC}"
   fi
 done
-
-# Add db_init log group
-if [ -n "${DB_INIT_NAME}" ]; then
-  DB_INIT_LOG_GROUP_NAME="/aws/lambda/${DB_INIT_NAME}"
-  
-  echo -e "${YELLOW}Checking CloudWatch log group for db_init: ${DB_INIT_LOG_GROUP_NAME}${NC}"
-  if aws logs describe-log-groups --log-group-name "${DB_INIT_LOG_GROUP_NAME}" --region "${REGION}" --query "logGroups[0].logGroupName" --output text 2>/dev/null | grep -q "${DB_INIT_LOG_GROUP_NAME}"; then
-    echo -e "${GREEN}DB init log group exists, checking state...${NC}"
-    
-    if check_state "module.monitoring.aws_cloudwatch_log_group.db_init\[0\]"; then
-      echo -e "${GREEN}DB init log group already in state.${NC}"
-    else
-      echo -e "${YELLOW}Importing DB init log group...${NC}"
-      terraform import "module.monitoring.aws_cloudwatch_log_group.db_init[0]" "${DB_INIT_LOG_GROUP_NAME}"
-    fi
-  else
-    echo -e "${YELLOW}DB init log group doesn't exist, will be created by Terraform${NC}"
-  fi
-fi
-
 
 # ----------------------------------------
 # SNS Topic
