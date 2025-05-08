@@ -98,6 +98,37 @@ else
 fi
 
 # ----------------------------------------
+# Security Groups
+# ----------------------------------------
+SECURITY_GROUPS=(
+  "bastion:module.vpc.aws_security_group.bastion[0]"
+  "lambda:module.vpc.aws_security_group.lambda"
+)
+
+for SG_ITEM in "${SECURITY_GROUPS[@]}"; do
+  SG_NAME=$(echo $SG_ITEM | cut -d':' -f1)
+  SG_STATE=$(echo $SG_ITEM | cut -d':' -f2)
+  SG_FULL_NAME="${PROJECT_NAME}-${STAGE}-${SG_NAME}-sg"
+
+  echo -e "${YELLOW}Checking Security Group: ${SG_FULL_NAME}${NC}"
+  SG_ID=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=${SG_FULL_NAME}" "Name=vpc-id,Values=${VPC_ID}" \
+    --query "SecurityGroups[0].GroupId" --output text --region "${REGION}" 2>/dev/null)
+
+  if [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
+    echo -e "${GREEN}Security group exists (${SG_ID}), checking state...${NC}"
+    if check_state "${SG_STATE}"; then
+      echo -e "${GREEN}Security group already in Terraform state.${NC}"
+    else
+      echo -e "${YELLOW}Importing security group...${NC}"
+      terraform import "${SG_STATE}" "${SG_ID}"
+    fi
+  else
+    echo -e "${YELLOW}Security group ${SG_FULL_NAME} doesn't exist, will be created by Terraform${NC}"
+  fi
+done
+
+# ----------------------------------------
 # S3 Bucket
 # ----------------------------------------
 BUCKET_NAME="${PROJECT_NAME}-${STAGE}-documents"
