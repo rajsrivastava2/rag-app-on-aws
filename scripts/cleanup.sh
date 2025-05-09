@@ -203,9 +203,8 @@ handle_lambda_vpc_dependencies() {
 }
 
 # Function to delete vpc with retries
-delete_vpc_with_retries() {
+delete_vpc() {
     local vpc_id="$1"
-    local max_attempts=5
     local has_dependencies=false
     
     echo -e "\n${YELLOW}Starting streamlined VPC deletion process for VPC: $vpc_id${NC}"
@@ -281,6 +280,24 @@ delete_vpc_with_retries() {
             fi
         done
     done
+
+    # 4. Release Elastic IPs based on Project Prefix
+    echo "Finding and releasing remaining Elastic IPs associated with project prefix..."
+    enis=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=${PREFIX}-*" --query 'Addresses[].{Name:Tags[?Key==`Name`]|[0].Value, PublicIp:PublicIp, AllocationId:AllocationId}' --output table --region $AWS_REGION)
+    
+    for eni in $enis; do
+        eips=$(aws ec2 describe-addresses --filters "Name=network-interface-id,Values=$eni" --query "Addresses[].AllocationId" --output text --region $AWS_REGION)
+        
+        for eip in $eips; do
+            if [ -n "$eip" ]; then
+                echo "Releasing Elastic IP: $eip"
+                run_command "aws ec2 release-address --allocation-id $eip --region $AWS_REGION" \
+                    "Failed to release Elastic IP" \
+                    "Successfully released Elastic IP" \
+                    "true"
+            fi
+        done
+    done
     
     # 5. Delete VPC Endpoints
     echo "Checking VPC Endpoints..."
@@ -312,12 +329,12 @@ delete_vpc_with_retries() {
     
     # 7. Delete route tables (except the main one)
     echo "Checking route tables..."
-    route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query "RouteTables[?!Associations[?Main]].RouteTableId" --output text --region $AWS_REGION)
+    route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --region $AWS_REGION --query 'RouteTables[?Associations[?Main!=`true`] || !Associations].RouteTableId' --output text)
     
     if [ -n "$route_tables" ]; then
         for rt_id in $route_tables; do
             # First disassociate any associations
-            associations=$(aws ec2 describe-route-tables --route-table-ids $rt_id --query "RouteTables[0].Associations[?!Main].RouteTableAssociationId" --output text --region $AWS_REGION)
+            associations=$(aws ec2 describe-route-tables --route-table-ids $rt_id --query 'RouteTables[0].Associations[?!Main].RouteTableAssociationId' --output text --region $AWS_REGION)
             
             for assoc_id in $associations; do
                 echo "Disassociating route table association: $assoc_id"
@@ -337,7 +354,7 @@ delete_vpc_with_retries() {
     
     # 8. Detach and delete internet gateway
     echo "Checking Internet Gateway..."
-    igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
+    igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query 'InternetGateways[0].InternetGatewayId' --output text --region $AWS_REGION)
     
     if [ -n "$igw" ] && [ "$igw" != "None" ]; then
         echo "Detaching Internet Gateway: $igw"
@@ -355,7 +372,7 @@ delete_vpc_with_retries() {
     
     # 9. Delete network ACLs (except default)
     echo "Checking Network ACLs..."
-    network_acls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query "NetworkAcls[?!IsDefault].NetworkAclId" --output text --region $AWS_REGION)
+    network_acls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkAcls[?!IsDefault].NetworkAclId' --output text --region $AWS_REGION)
     
     if [ -n "$network_acls" ]; then
         for acl_id in $network_acls; do
@@ -381,20 +398,20 @@ delete_vpc_with_retries() {
             echo -e "${YELLOW}Failed to delete VPC on attempt $attempt. Checking for remaining dependencies...${NC}"
             
             # Check for remaining ENIs
-            remaining_enis=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$vpc_id" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+            remaining_enis=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text --region $AWS_REGION)
             
             if [ -n "$remaining_enis" ]; then
                 echo "Found remaining network interfaces: $remaining_enis"
                 has_dependencies=true
                 
                 for eni in $remaining_enis; do
-                    eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Description" --output text)
-                    eni_status=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Status" --output text)
+                    eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query 'NetworkInterfaces[0].Description' --output text)
+                    eni_status=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query 'NetworkInterfaces[0].Status' --output text)
                     
                     echo "ENI $eni: $eni_desc (Status: $eni_status)"
                     
                     # Try to force detach if there's an attachment
-                    attachment_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text 2>/dev/null || echo "")
+                    attachment_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query 'NetworkInterfaces[0].Attachment.AttachmentId' --output text 2>/dev/null || echo "")
                     
                     if [ -n "$attachment_id" ] && [ "$attachment_id" != "None" ]; then
                         echo "Attempting to force-detach: $attachment_id"
@@ -409,7 +426,7 @@ delete_vpc_with_retries() {
             fi
             
             # Check for remaining security groups
-            remaining_sgs=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
+            remaining_sgs=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" 'Name=group-name,Values=!default' --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
             
             if [ -n "$remaining_sgs" ]; then
                 echo "Found remaining security groups: $remaining_sgs"
@@ -417,7 +434,7 @@ delete_vpc_with_retries() {
                 
                 for sg_id in $remaining_sgs; do
                     # Clear all rules first
-                    ingress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissions" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
+                    ingress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query 'SecurityGroups[0].IpPermissions' --output json --region $AWS_REGION 2>/dev/null || echo "[]")
                     
                     if [ "$ingress_rules" != "[]" ] && [ "$ingress_rules" != "null" ]; then
                         aws ec2 revoke-security-group-ingress --group-id $sg_id --ip-permissions "$ingress_rules" --region $AWS_REGION 2>/dev/null || true
@@ -428,19 +445,14 @@ delete_vpc_with_retries() {
                     aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION 2>/dev/null || true
                 done
             fi
-            
-            # Increasing wait time with each attempt
-            wait_time=$((15 * attempt))
-            wait_with_message $wait_time "Waiting before next VPC deletion attempt..."
         fi
     done
     
     # If we reach here, we've exhausted all attempts
     if [ "$has_dependencies" = true ]; then
-        echo -e "${RED}Failed to delete VPC after $max_attempts attempts due to remaining dependencies.${NC}"
-        echo -e "${YELLOW}Manual cleanup may be required for VPC: $vpc_id${NC}"
+        echo -e "${RED}Failed to delete VPC attempts due to remaining dependencies.${NC}"
     else
-        echo -e "${RED}Failed to delete VPC after $max_attempts attempts.${NC}"
+        echo -e "${RED}Failed to delete VPC after attempts.${NC}"
     fi
     
     return 1
@@ -836,6 +848,7 @@ else
     echo "DB subnet group not found: $DB_SUBNET_GROUP"
 fi
 
+
 echo -e "\n${YELLOW}Step 9: Delete DynamoDB tables${NC}"
 TABLES=(
     "${PREFIX}-metadata"
@@ -1048,8 +1061,70 @@ else
     echo "No IAM policies found with prefix: ${PREFIX}"
 fi
 
-#################### Get vpc_id ###############################################
-# Find VPCs matching our project
+echo -e "\n${YELLOW}Step 12: Delete all Security Groups${NC}"
+# Get all security groups in the VPC except the default one
+security_groups=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${PREFIX}-*" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
+
+if [ -n "$security_groups" ]; then
+    echo "Found security groups to delete: $security_groups"
+    
+    # First remove all rules to break dependencies
+    for sg_id in $security_groups; do
+        echo "Removing all rules from security group: $sg_id"
+        
+        # Get all ingress rules
+        ingress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissions" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
+        
+        if [ "$ingress_rules" != "[]" ] && [ "$ingress_rules" != "null" ]; then
+            echo "Removing ingress rules..."
+            run_command "aws ec2 revoke-security-group-ingress --group-id $sg_id --ip-permissions '$ingress_rules' --region $AWS_REGION" \
+                "Failed to remove ingress rules" \
+                "Successfully removed ingress rules" \
+                "true"
+        fi
+        
+        # Get all egress rules except the default one
+        egress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissionsEgress[?!(IpProtocol == '-1' && CidrIp == '0.0.0.0/0')]" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
+        
+        if [ "$egress_rules" != "[]" ] && [ "$egress_rules" != "null" ]; then
+            echo "Removing non-default egress rules..."
+            run_command "aws ec2 revoke-security-group-egress --group-id $sg_id --ip-permissions '$egress_rules' --region $AWS_REGION" \
+                "Failed to remove egress rules" \
+                "Successfully removed egress rules" \
+                "true"
+        fi
+    done
+    
+    # Wait for rule changes to propagate
+    wait_with_message 10 "Waiting for rule changes to propagate..."
+    
+    # Now delete the security groups
+    for sg_id in $security_groups; do
+        echo "Deleting security group: $sg_id"
+        # Make multiple attempts with increasing wait times
+        for attempt in {1..3}; do
+            if run_command "aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION" \
+                "Failed to delete security group on attempt $attempt" \
+                "Successfully deleted security group: $sg_id" \
+                "true"; then
+                break
+            else
+                # Check if the security group still exists
+                if ! aws ec2 describe-security-groups --group-ids $sg_id --region $AWS_REGION &>/dev/null; then
+                    echo "Security group no longer exists, deletion was successful"
+                    break
+                fi
+                wait_with_message $((5 * attempt)) "Waiting before retry..."
+            fi
+        done
+    done
+else
+    echo "No non-default security groups found in the VPC."
+fi
+
+# Streamlined VPC deletion process
+echo -e "\n${YELLOW}Step 13: Streamlined VPC deletion process${NC}"
+# Find VPCs matching project
 echo "Looking for VPCs associated with project: ${PREFIX}"
 
 # Try multiple methods to find the VPC
@@ -1075,79 +1150,11 @@ if [ -z "$vpc_id" ] || [ "$vpc_id" = "None" ]; then
         vpc_id=$sg_info
     fi
 fi
-################################################################################
 
-echo -e "\n${YELLOW}Step 12: Delete all Security Groups${NC}"
-if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
-    echo -e "${GREEN}Found VPC: $vpc_id${NC}"
-    # Get all security groups in the VPC except the default one
-    security_groups=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" "Name=group-name,Values=!default" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
-    
-    if [ -n "$security_groups" ]; then
-        echo "Found security groups to delete: $security_groups"
-        
-        # First remove all rules to break dependencies
-        for sg_id in $security_groups; do
-            echo "Removing all rules from security group: $sg_id"
-            
-            # Get all ingress rules
-            ingress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissions" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
-            
-            if [ "$ingress_rules" != "[]" ] && [ "$ingress_rules" != "null" ]; then
-                echo "Removing ingress rules..."
-                run_command "aws ec2 revoke-security-group-ingress --group-id $sg_id --ip-permissions '$ingress_rules' --region $AWS_REGION" \
-                    "Failed to remove ingress rules" \
-                    "Successfully removed ingress rules" \
-                    "true"
-            fi
-            
-            # Get all egress rules except the default one
-            egress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissionsEgress[?!(IpProtocol == '-1' && CidrIp == '0.0.0.0/0')]" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
-            
-            if [ "$egress_rules" != "[]" ] && [ "$egress_rules" != "null" ]; then
-                echo "Removing non-default egress rules..."
-                run_command "aws ec2 revoke-security-group-egress --group-id $sg_id --ip-permissions '$egress_rules' --region $AWS_REGION" \
-                    "Failed to remove egress rules" \
-                    "Successfully removed egress rules" \
-                    "true"
-            fi
-        done
-        
-        # Wait for rule changes to propagate
-        wait_with_message 10 "Waiting for rule changes to propagate..."
-        
-        # Now delete the security groups
-        for sg_id in $security_groups; do
-            echo "Deleting security group: $sg_id"
-            # Make multiple attempts with increasing wait times
-            for attempt in {1..3}; do
-                if run_command "aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION" \
-                    "Failed to delete security group on attempt $attempt" \
-                    "Successfully deleted security group: $sg_id" \
-                    "true"; then
-                    break
-                else
-                    # Check if the security group still exists
-                    if ! aws ec2 describe-security-groups --group-ids $sg_id --region $AWS_REGION &>/dev/null; then
-                        echo "Security group no longer exists, deletion was successful"
-                        break
-                    fi
-                    wait_with_message $((5 * attempt)) "Waiting before retry..."
-                fi
-            done
-        done
-    else
-        echo "No non-default security groups found in the VPC."
-    fi
-else
-    echo "No VPC found with the specified prefix: ${PREFIX}"
-fi
-
-echo -e "\n${YELLOW}Step 13: Streamlined VPC deletion process${NC}"
 # Function to delete VPC
 if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
     echo -e "${GREEN}Found VPC to delete: $vpc_id${NC}"
-    delete_vpc_with_retries "$vpc_id"
+    delete_vpc "$vpc_id"
 else
     echo -e "${YELLOW}No VPC found matching the project prefix.${NC}"
 fi
@@ -1177,27 +1184,20 @@ else
     echo "No unattached ENIs found."
 fi
 
-# Wait for any previous VPC operations to complete
-echo -e "\n${YELLOW}Step 17.5:Waiting for any previous VPC operations to complete..."
-wait_with_message 30 "Allowing time for previous operations to finalize..."
-
 # Now try to delete the VPC one final time
 echo -e "\n${YELLOW}Step 17.5: Attempting final VPC deletion${NC}"
 echo "Attempting final VPC deletion..."
-VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PREFIX}-vpc" --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
-
-if [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]]; then
-    echo "Found VPC: $VPC_ID. Attempting final deletion..."
-    
+if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
+    echo "Found VPC: $vpc_id. Attempting final deletion..."
     # Check if there are any remaining dependencies
-    remaining_deps=$(aws ec2 describe-vpc-attribute --vpc-id $VPC_ID --attribute enableDnsSupport --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
+    remaining_deps=$(aws ec2 describe-vpc-attribute --vpc-id $vpc_id --attribute enableDnsSupport --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
     
     if [ "$remaining_deps" = "true" ]; then
         # Check for remaining resources
         echo "Checking for remaining dependencies on VPC..."
         
         # Check for remaining subnets
-        subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
+        subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
         if [ -n "$subnets" ]; then
             echo "Found remaining subnets. Attempting to delete them first..."
             for subnet_id in $subnets; do
@@ -1207,18 +1207,18 @@ if [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]]; then
         fi
         
         # Check for remaining internet gateways
-        igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
+        igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
         if [ -n "$igw" ] && [ "$igw" != "None" ]; then
             echo "Found attached internet gateway. Detaching and deleting..."
-            aws ec2 detach-internet-gateway --internet-gateway-id $igw --vpc-id $VPC_ID --region $AWS_REGION 2>/dev/null
+            aws ec2 detach-internet-gateway --internet-gateway-id $igw --vpc-id $vpc_id --region $AWS_REGION 2>/dev/null
             aws ec2 delete-internet-gateway --internet-gateway-id $igw --region $AWS_REGION 2>/dev/null
         fi
         
     fi
     
     # Final attempt to delete VPC
-    aws ec2 delete-vpc --vpc-id "$VPC_ID" --region $AWS_REGION \
-        && echo -e "${GREEN}VPC deleted: $VPC_ID${NC}" \
+    aws ec2 delete-vpc --vpc-id "$vpc_id" --region $AWS_REGION \
+        && echo -e "${GREEN}VPC deleted: $vpc_id${NC}" \
         || echo -e "${YELLOW}VPC deletion failed — likely due to remaining dependencies.${NC}"
 else
     echo "No VPC found with tag Name=${PREFIX}-vpc. The VPC might have been successfully deleted in earlier steps."
@@ -1292,7 +1292,6 @@ fi
 echo -e "${BLUE}============================================================${NC}"
 
 echo -e "\n${GREEN}Summary of cleanup actions:${NC}"
-echo "- Cleared Terraform state locks"
 echo "- Removed API Gateway resources"
 echo "- Deleted Cognito User Pool and related resources"
 echo "- Removed Lambda functions and layers"
@@ -1306,7 +1305,6 @@ echo "- Emptied and deleted S3 buckets"
 echo "- Removed IAM roles and policies"
 echo "- Deleted Security Groups"
 echo "- Deleted VPC and all associated resources"
-echo "- Removed CloudFormation stacks"
 
 echo -e "\n${YELLOW}Note: The Terraform state bucket '${PROJECT_NAME}-terraform-state' was not fully deleted to preserve${NC}"
 echo -e "${YELLOW}state files for other environments. Only the ${STAGE}/ folder was cleaned up.${NC}"
