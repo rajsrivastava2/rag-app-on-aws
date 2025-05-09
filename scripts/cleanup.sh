@@ -183,6 +183,45 @@ resource_exists() {
     fi
 }
 
+# Function to handle Lambda functions with VPC access
+handle_lambda_vpc_dependencies() {
+    local vpc_id="$1"
+    
+    echo -e "\n${YELLOW}Identifying Lambda functions with VPC access...${NC}"
+    
+    # Find all Lambda functions with VPC configuration
+    local vpc_lambdas=$(aws lambda list-functions --region $AWS_REGION --query "Functions[?VpcConfig.VpcId=='$vpc_id'].FunctionName" --output text)
+    
+    if [ -n "$vpc_lambdas" ]; then
+        echo "Found Lambda functions with VPC access: $vpc_lambdas"
+        
+        for func in $vpc_lambdas; do
+            echo "Updating Lambda function $func to remove VPC configuration..."
+            
+            # Update the function to remove VPC configuration
+            run_command "aws lambda update-function-configuration --function-name $func --vpc-config SubnetIds=[],SecurityGroupIds=[] --region $AWS_REGION" \
+                "Failed to remove VPC configuration from Lambda function: $func" \
+                "Successfully removed VPC configuration from Lambda function: $func" \
+                "true"
+        done
+        
+        # Wait for the Lambda ENIs to be deleted (this can take some time)
+        echo "Waiting for Lambda ENIs to be deleted..."
+        wait_with_message 90 "Waiting for Lambda ENIs to be cleaned up (this may take a few minutes)..."
+        
+        # Check if ENIs are still around
+        local remaining_enis=$(aws ec2 describe-network-interfaces --filters "Name=description,Values=*Lambda*" "Name=vpc-id,Values=$vpc_id" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+        
+        if [ -n "$remaining_enis" ]; then
+            echo -e "${YELLOW}Some Lambda ENIs still exist. Waiting longer for AWS to clean them up...${NC}"
+            echo "Remaining ENIs: $remaining_enis"
+            wait_with_message 120 "Extended wait for Lambda ENI cleanup..."
+        fi
+    else
+        echo "No Lambda functions with VPC access found."
+    fi
+}
+
 echo -e "\n${YELLOW}Step 1: Clear any Terraform state locks${NC}"
 DYNAMODB_TABLE="${PREFIX}-terraform-state-lock"
 
@@ -1065,10 +1104,9 @@ for sg_id in "${SG_IDS[@]}"; do
             break
         fi
         
-        if run_command "aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION" \
-            "" \
-            "Successfully deleted security group: $sg_id" \
-            "true"; then
+        # Try to delete the security group
+        if aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION 2>/dev/null; then
+            echo -e "${GREEN}Successfully deleted security group: $sg_id${NC}"
             deletion_succeeded=true
             break
         else
@@ -1080,30 +1118,24 @@ for sg_id in "${SG_IDS[@]}"; do
             if [ -n "$attached_enis" ]; then
                 echo "Security group is attached to these network interfaces: $attached_enis"
                 for eni in $attached_enis; do
-                    echo "Checking ENI $eni..."
-                    eni_info=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].[Description,Status]" --output text)
-                    echo "ENI $eni info: $eni_info"
-                done
-                
-                echo "Note: You may need to manually detach or delete these resources."
-            fi
-            
-            # Check if the security group still has dependencies
-            dependencies=$(aws ec2 describe-security-group-references --group-id $sg_id --region $AWS_REGION --query "SecurityGroupReferenceSet[].ReferencingSecurityGroups[].GroupId" --output text 2>/dev/null || echo "")
-            
-            if [ -n "$dependencies" ]; then
-                echo "Security group $sg_id is referenced by: $dependencies"
-                for dep_sg in $dependencies; do
-                    echo "Attempting to remove references from $dep_sg to $sg_id..."
-                    # Try to remove any remaining references
-                    dep_rules=$(aws ec2 describe-security-groups --group-ids $dep_sg --query "SecurityGroups[0].IpPermissions[?UserIdGroupPairs[?GroupId=='$sg_id']]" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
-                    if [ "$dep_rules" != "[]" ] && [ "$dep_rules" != "null" ]; then
-                        run_command "aws ec2 revoke-security-group-ingress --group-id $dep_sg --ip-permissions '$dep_rules' --region $AWS_REGION" "" "" "true"
+                    eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Description" --output text)
+                    echo "ENI $eni info: $eni_desc"
+                    
+                    # If this is a Lambda ENI, try to fix it
+                    if [[ $eni_desc == *"Lambda"* ]]; then
+                        echo "This is a Lambda ENI. Trying to identify the Lambda function..."
+                        # Try to extract the Lambda function name from the ENI description
+                        func_name=$(echo $eni_desc | grep -o "${PREFIX}-[^-]*-[^-]*" || echo "")
+                        if [ -n "$func_name" ]; then
+                            echo "Attempting to remove VPC configuration from Lambda function: $func_name"
+                            aws lambda update-function-configuration --function-name $func_name --vpc-config SubnetIds=[],SecurityGroupIds=[] --region $AWS_REGION 2>/dev/null || echo "Failed to update Lambda function"
+                        fi
                     fi
                 done
             fi
             
-            wait_seconds=$((10 * attempt))
+            # Wait longer between each attempt
+            wait_seconds=$((30 * attempt))
             wait_with_message $wait_seconds "Waiting before retry attempt #$((attempt+1))..."
         fi
     done
@@ -1143,6 +1175,9 @@ fi
 if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
     echo "Found VPC: $vpc_id. Starting cleanup of all associated resources..."
     
+    # First handle any Lambda functions with VPC access
+    handle_lambda_vpc_dependencies "$vpc_id"
+
     # 1. Find and terminate EC2 instances
     echo "Checking for EC2 instances..."
     instances=$(aws ec2 describe-instances --filters "Name=vpc-id,Values=$vpc_id" "Name=instance-state-name,Values=pending,running,stopping,stopped" --query "Reservations[].Instances[].InstanceId" --output text --region $AWS_REGION)

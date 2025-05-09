@@ -72,6 +72,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ needs.determine_environment.outputs.aws_region }}
       
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Ensure AWS CLI is available
         run: |
           aws --version || (echo "AWS CLI not found!" && exit 1)
@@ -81,3 +84,4 @@ jobs:
 
       - name: Run AWS Cleanup Script
         run: ./scripts/cleanup.sh
+        timeout-minutes: 30  # Allow more time for cleanup to complete
