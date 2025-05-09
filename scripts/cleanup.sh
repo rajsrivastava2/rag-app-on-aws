@@ -1236,6 +1236,67 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
         aws ec2 release-address --allocation-id "$alloc_id" --region "$AWS_REGION" || echo "Failed to release EIP $alloc_id"
     done
 
+    echo "Delete Security Groups if exist..."
+    # Get all security groups in the VPC except the default one
+    security_groups=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${PREFIX}-*" --query "SecurityGroups[].GroupId" --output text --region $AWS_REGION)
+
+    if [ -n "$security_groups" ]; then
+        echo "Found security groups to delete: $security_groups"
+        
+        # First remove all rules to break dependencies
+        for sg_id in $security_groups; do
+            echo "Removing all rules from security group: $sg_id"
+            
+            # Get all ingress rules
+            ingress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissions" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
+            
+            if [ "$ingress_rules" != "[]" ] && [ "$ingress_rules" != "null" ]; then
+                echo "Removing ingress rules..."
+                run_command "aws ec2 revoke-security-group-ingress --group-id $sg_id --ip-permissions '$ingress_rules' --region $AWS_REGION" \
+                    "Failed to remove ingress rules" \
+                    "Successfully removed ingress rules" \
+                    "true"
+            fi
+            
+            # Get all egress rules except the default one
+            egress_rules=$(aws ec2 describe-security-groups --group-ids $sg_id --query "SecurityGroups[0].IpPermissionsEgress[?!(IpProtocol == '-1' && CidrIp == '0.0.0.0/0')]" --output json --region $AWS_REGION 2>/dev/null || echo "[]")
+            
+            if [ "$egress_rules" != "[]" ] && [ "$egress_rules" != "null" ]; then
+                echo "Removing non-default egress rules..."
+                run_command "aws ec2 revoke-security-group-egress --group-id $sg_id --ip-permissions '$egress_rules' --region $AWS_REGION" \
+                    "Failed to remove egress rules" \
+                    "Successfully removed egress rules" \
+                    "true"
+            fi
+        done
+        
+        # Wait for rule changes to propagate
+        wait_with_message 10 "Waiting for rule changes to propagate..."
+        
+        # Now delete the security groups
+        for sg_id in $security_groups; do
+            echo "Deleting security group: $sg_id"
+            # Make multiple attempts with increasing wait times
+            for attempt in {1..3}; do
+                if run_command "aws ec2 delete-security-group --group-id $sg_id --region $AWS_REGION" \
+                    "Failed to delete security group on attempt $attempt" \
+                    "Successfully deleted security group: $sg_id" \
+                    "true"; then
+                    break
+                else
+                    # Check if the security group still exists
+                    if ! aws ec2 describe-security-groups --group-ids $sg_id --region $AWS_REGION &>/dev/null; then
+                        echo "Security group no longer exists, deletion was successful"
+                        break
+                    fi
+                    wait_with_message $((5 * attempt)) "Waiting before retry..."
+                fi
+            done
+        done
+    else
+        echo "No non-default security groups found in the VPC."
+    fi
+
     echo "Final VPC Deletion..."
     aws ec2 delete-vpc --vpc-id "$vpc_id" --region "$AWS_REGION" \
         && echo -e "${GREEN}VPC deleted: $vpc_id${NC}" \
