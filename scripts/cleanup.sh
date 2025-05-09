@@ -217,6 +217,75 @@ handle_lambda_eni_for_sg() {
     sleep 10
 }
 
+# Function to find and clean up Lambda ENIs
+cleanup_lambda_enis() {
+    echo -e "\n${YELLOW}Finding and cleaning up Lambda ENIs...${NC}"
+    
+    # Find all Lambda ENIs across the account
+    lambda_enis=$(aws ec2 describe-network-interfaces --filters "Name=description,Values=*Lambda*" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+    
+    if [ -n "$lambda_enis" ]; then
+        echo "Found Lambda ENIs: $lambda_enis"
+        
+        for eni in $lambda_enis; do
+            eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Description" --output text)
+            eni_status=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Status" --output text)
+            vpc_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].VpcId" --output text)
+            
+            # Only proceed if this ENI is in our project's VPC or has our project prefix in description
+            if [[ $eni_desc == *"${PREFIX}"* ]]; then
+                echo "Processing ENI $eni: $eni_desc (Status: $eni_status, VPC: $vpc_id)"
+                
+                # Extract Lambda function name from ENI description if possible
+                lambda_name=$(echo $eni_desc | grep -o "${PREFIX}-[^-]*-[^-]*" || echo "")
+                
+                if [ -n "$lambda_name" ]; then
+                    echo "ENI belongs to Lambda function: $lambda_name"
+                    echo "Checking if Lambda function still exists..."
+                    
+                    # Check if Lambda function still exists
+                    if aws lambda get-function --function-name "$lambda_name" --region $AWS_REGION &>/dev/null; then
+                        echo "Lambda function exists. Removing VPC configuration..."
+                        aws lambda update-function-configuration --function-name "$lambda_name" --vpc-config SubnetIds=[],SecurityGroupIds=[] --region $AWS_REGION \
+                            || echo "Failed to update Lambda function configuration."
+                    else
+                        echo "Lambda function no longer exists or can't be accessed. Will try to detach ENI directly."
+                    fi
+                fi
+                
+                # Regardless of Lambda function status, try to detach/delete the ENI directly
+                echo "Attempting to handle ENI directly..."
+                
+                # Get attachment info
+                attachment_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text 2>/dev/null)
+                
+                if [ -n "$attachment_id" ] && [ "$attachment_id" != "None" ]; then
+                    echo "ENI has attachment: $attachment_id. Attempting to force-detach..."
+                    aws ec2 detach-network-interface --attachment-id $attachment_id --force --region $AWS_REGION --no-cli-pager 2>/dev/null \
+                        || echo "Failed to detach ENI attachment. This may require manual intervention."
+                    
+                    # Wait for detachment to complete
+                    echo "Waiting for detachment to complete..."
+                    sleep 10
+                fi
+                
+                # Try to delete the ENI directly (this may fail if ENI is managed by AWS)
+                echo "Attempting to delete ENI directly..."
+                aws ec2 delete-network-interface --network-interface-id $eni --region $AWS_REGION --no-cli-pager 2>/dev/null \
+                    || echo "Failed to delete ENI directly. This may require manual intervention."
+            else
+                echo "Skipping ENI $eni as it doesn't appear to be related to our project."
+            fi
+        done
+        
+        # Wait for AWS to process ENI changes
+        echo "Waiting for AWS to process ENI changes..."
+        wait_with_message 60 "Waiting for AWS to process ENI operations..."
+    else
+        echo "No Lambda ENIs found."
+    fi
+}
+
 # Function to handle Lambda functions with VPC access
 handle_lambda_vpc_dependencies() {
     local vpc_id="$1"
@@ -418,6 +487,9 @@ if [ -n "$user_pool_id" ]; then
 else
     echo "No Cognito User Pool found with name: $user_pool_name"
 fi
+
+echo -e "\n${YELLOW}Step 4.5: Cleanup Lambda ENIs${NC}"
+cleanup_lambda_enis
 
 echo -e "\n${YELLOW}Step 5: Remove all Lambda functions and layers${NC}"
 # List of Lambda functions to delete
@@ -1153,29 +1225,25 @@ for sg_id in "${SG_IDS[@]}"; do
             if [ -n "$attached_enis" ]; then
                 echo "Security group is attached to these network interfaces: $attached_enis"
                 
-                # Loop through each attached ENI
-                for eni in $attached_enis; do
-                    eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Description" --output text)
-                    eni_status=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Status" --output text)
-                    echo "ENI $eni info: $eni_desc (Status: $eni_status)"
-                    
-                    if [[ $eni_desc == *"Lambda"* ]]; then
-                        echo "This is a Lambda ENI. The Lambda function may have already been detached or deleted."
-                        echo "Attempting to force-detach the ENI if possible..."
+                # If we're at the last attempt, print more detailed information to help with manual cleanup
+                if [ $attempt -eq 5 ]; then
+                    echo -e "${YELLOW}After 5 attempts, security group still has attachments. Details:${NC}"
+                    for eni in $attached_enis; do
+                        eni_desc=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Description" --output text)
+                        subnet_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].SubnetId" --output text)
+                        attach_info=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Attachment" --output json)
+                        requester_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].RequesterId" --output text)
                         
-                        # Check if ENI has an attachment
-                        attachment_id=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].Attachment.AttachmentId" --output text 2>/dev/null)
-                        
-                        if [ -n "$attachment_id" ] && [ "$attachment_id" != "None" ]; then
-                            echo "Found attachment: $attachment_id. Attempting to force-detach..."
-                            aws ec2 detach-network-interface --attachment-id $attachment_id --force --region $AWS_REGION 2>/dev/null || echo "Could not detach ENI attachment"
-                            
-                            # Wait a bit for the detachment to process
-                            echo "Waiting for detachment to process..."
-                            sleep 10
-                        fi
-                    fi
-                done
+                        echo "ENI: $eni"
+                        echo "  Description: $eni_desc"
+                        echo "  Subnet: $subnet_id"
+                        echo "  Requester ID: $requester_id"
+                        echo "  Attachment info: $attach_info"
+                        echo ""
+                    done
+                    echo "You may need to manually delete these resources from the AWS Console."
+                    echo "This is common with Lambda ENIs, which can take time to be fully released by AWS."
+                fi
             fi
             
             # Wait longer between each attempt
@@ -1187,6 +1255,7 @@ for sg_id in "${SG_IDS[@]}"; do
     if [ "$deletion_succeeded" = false ]; then
         echo -e "${YELLOW}Warning: Unable to delete security group $sg_id after multiple attempts.${NC}"
         echo "You may need to check AWS console and manually delete this security group."
+        echo "Consider running this cleanup script again after 15-30 minutes, as AWS may still be releasing resources."
     fi
 done
 
@@ -1221,6 +1290,21 @@ fi
 if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
     echo "Found VPC: $vpc_id. Starting cleanup of all associated resources..."
     
+    vpc_lambda_enis=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$vpc_id" "Name=description,Values=*Lambda*" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+    
+    if [ -n "$vpc_lambda_enis" ]; then
+        echo -e "${YELLOW}Warning: There are still Lambda ENIs in this VPC after earlier cleanup attempts.${NC}"
+        echo "This is a known issue with AWS Lambda VPC integration, where ENIs may take time to be fully released."
+        echo "The script will continue, but VPC deletion may fail. If it does, wait 15-30 minutes and try again."
+        
+        # Print detailed information about remaining ENIs for debugging
+        echo "Remaining Lambda ENIs:"
+        for eni in $vpc_lambda_enis; do
+            eni_info=$(aws ec2 describe-network-interfaces --network-interface-ids $eni --region $AWS_REGION --query "NetworkInterfaces[0].[Description,Status,SubnetId]" --output text)
+            echo "ENI $eni: $eni_info"
+        done
+    fi
+
     vpc_enis=$(aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=$vpc_id" "Name=description,Values=*Lambda*" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
 
     if [ -n "$vpc_enis" ]; then
