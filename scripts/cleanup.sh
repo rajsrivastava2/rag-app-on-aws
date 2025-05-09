@@ -21,14 +21,11 @@ echo "============================================================"
 echo -e "${NC}"
 
 # Get project configuration
-read -p "Enter your project name (default: rag-app): " PROJECT_NAME
-PROJECT_NAME=${PROJECT_NAME:-rag-app}
+PROJECT_NAME=${PROJECT_NAME}
 
-read -p "Enter environment/stage (default: dev): " STAGE
-STAGE=${STAGE:-dev}
+STAGE=${STAGE}
 
-read -p "Enter AWS region (default: us-east-1): " AWS_REGION
-AWS_REGION=${AWS_REGION:-us-east-1}
+AWS_REGION=${AWS_REGION}
 
 # Standard prefix for resources
 PREFIX="${PROJECT_NAME}-${STAGE}"
@@ -38,13 +35,6 @@ echo -e "  Project: ${PROJECT_NAME}"
 echo -e "  Stage: ${STAGE}"
 echo -e "  Region: ${AWS_REGION}${NC}"
 echo -e "${RED}WARNING: This action is IRREVERSIBLE and will delete ALL data!${NC}"
-read -p "Are you sure you want to proceed? (yes/no): " CONFIRMATION
-
-if [[ $CONFIRMATION != "yes" ]]; then
-    echo "Cleanup cancelled."
-    exit 0
-fi
-
 echo -e "\n${YELLOW}Starting cleanup process...${NC}"
 
 # Function to check if a command exists
