@@ -1184,9 +1184,9 @@ else
     echo "No unattached ENIs found."
 fi
 
-# Now try to delete the VPC one final time
+# Now try to delete the VPC and any remaining resources pending oen final time
 echo -e "\n${YELLOW}Step 17.5: Attempting final VPC deletion${NC}"
-echo "Attempting final VPC deletion..."
+echo "Attempting final VPC and remaining pending resources deletion..."
 if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
     echo "Found VPC: $vpc_id. Checking and deleting dependencies..."
 
@@ -1224,6 +1224,16 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
     for rt in $route_tables; do
         echo "Deleting route table: $rt"
         aws ec2 delete-route-table --route-table-id "$rt" --region "$AWS_REGION" || echo "Failed to delete route table $rt"
+    done
+
+    echo "Release Elastic IPs matching name prefix if exist..."
+    eips_to_release=$(aws ec2 describe-addresses --region "$AWS_REGION" \
+        --query "Addresses[?Tags[?Key=='Name' && starts_with(Value, '${PREFIX}-')] && Domain=='vpc'].AllocationId" \
+        --output text)
+
+    for alloc_id in $eips_to_release; do
+        echo "Releasing Elastic IP with Allocation ID: $alloc_id"
+        aws ec2 release-address --allocation-id "$alloc_id" --region "$AWS_REGION" || echo "Failed to release EIP $alloc_id"
     done
 
     echo "Final VPC Deletion..."
