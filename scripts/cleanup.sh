@@ -434,10 +434,7 @@ else
     echo "No Cognito User Pool found with name: $user_pool_name"
 fi
 
-echo -e "\n${YELLOW}Step 5: Cleanup Lambda ENIs${NC}"
-cleanup_lambda_enis
-
-echo -e "\n${YELLOW}Step 6: Remove all Lambda functions and layers${NC}"
+echo -e "\n${YELLOW}Step 5: Remove all Lambda functions and layers${NC}"
 # List of Lambda functions to delete
 LAMBDA_FUNCTIONS=(
     "${PREFIX}-auth-handler"
@@ -531,7 +528,7 @@ else
     echo "No Lambda layers found with prefix: ${PREFIX}"
 fi
 
-echo -e "\n${YELLOW}Step 7: Delete CloudWatch Log Groups${NC}"
+echo -e "\n${YELLOW}Step 6: Delete CloudWatch Log Groups${NC}"
 # Delete log groups for Lambda functions
 for func in "${LAMBDA_FUNCTIONS[@]}"; do
     log_group="/aws/lambda/$func"
@@ -573,7 +570,7 @@ else
     echo "VPC Flow Log Group not found: $vpc_flow_log_group"
 fi
 
-echo -e "\n${YELLOW}Step 8: Delete Secrets Manager secrets${NC}"
+echo -e "\n${YELLOW}Step 7: Delete Secrets Manager secrets${NC}"
 SECRETS=(
     "${PREFIX}-db-credentials"
     "${PREFIX}-gemini-api-key"
@@ -593,7 +590,7 @@ for secret in "${SECRETS[@]}"; do
     fi
 done
 
-echo -e "\n${YELLOW}Step 9: Delete SNS topics${NC}"
+echo -e "\n${YELLOW}Step 8: Delete SNS topics${NC}"
 # Find and delete SNS topics with the project name
 topics=$(aws sns list-topics --region $AWS_REGION --query "Topics[?contains(TopicArn, '${PREFIX}')].TopicArn" --output text)
 
@@ -624,7 +621,7 @@ else
     echo "No SNS topics found with name containing: ${PREFIX}"
 fi
 
-echo -e "\n${YELLOW}Step 10: Delete CloudWatch Alarms${NC}"
+echo -e "\n${YELLOW}Step 9: Delete CloudWatch Alarms${NC}"
 # Find and delete CloudWatch alarms with the project name
 alarms=$(aws cloudwatch describe-alarms --region $AWS_REGION --query "MetricAlarms[?contains(AlarmName, '${PREFIX}')].AlarmName" --output text)
 
@@ -639,7 +636,7 @@ else
     echo "No CloudWatch alarms found with name containing: ${PREFIX}"
 fi
 
-echo -e "\n${YELLOW}Step 11: Delete RDS instances and related resources${NC}"
+echo -e "\n${YELLOW}Step 10: Delete RDS instances and related resources${NC}"
 DB_INSTANCE="${PREFIX}-postgres"
 DB_PARAM_GROUP="${PREFIX}-postgres-params"
 DB_SUBNET_GROUP="${PREFIX}-db-subnet-group"
@@ -719,7 +716,7 @@ else
     echo "DB subnet group not found: $DB_SUBNET_GROUP"
 fi
 
-echo -e "\n${YELLOW}Step 12: Delete DynamoDB tables${NC}"
+echo -e "\n${YELLOW}Step 11: Delete DynamoDB tables${NC}"
 TABLES=(
     "${PREFIX}-metadata"
     "${PREFIX}-terraform-state-lock"
@@ -738,7 +735,7 @@ for table in "${TABLES[@]}"; do
     fi
 done
 
-echo -e "\n${YELLOW}Step 13: Empty and delete S3 buckets${NC}"
+echo -e "\n${YELLOW}Step 12: Empty and delete S3 buckets${NC}"
 BUCKETS=(
     "${PREFIX}-documents"
     "${PREFIX}-lambda-code"
@@ -847,7 +844,7 @@ for bucket in "${BUCKETS[@]}"; do
     fi
 done
 
-echo -e "\n${YELLOW}Step 14: Delete IAM roles and policies${NC}"
+echo -e "\n${YELLOW}Step 13: Delete IAM roles and policies${NC}"
 # Find IAM roles with the project prefix
 roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, '${PREFIX}')].RoleName" --output text)
 
@@ -931,7 +928,7 @@ else
     echo "No IAM policies found with prefix: ${PREFIX}"
 fi
 
-echo -e "\n${YELLOW}Step 15: Delete all Security Groups${NC}"
+echo -e "\n${YELLOW}Step 14: Delete all Security Groups${NC}"
 # Get the VPC ID for filtering
 vpc_id=$(aws ec2 describe-vpcs --region $AWS_REGION --filters "Name=tag:Name,Values=${PREFIX}-vpc" --query "Vpcs[0].VpcId" --output text 2>/dev/null)
 
@@ -1014,7 +1011,7 @@ else
     echo "No VPC found with the specified prefix: ${PREFIX}"
 fi
 
-echo -e "\n${YELLOW}Step 16: Streamlined VPC deletion process${NC}"
+echo -e "\n${YELLOW}Step 15: Streamlined VPC deletion process${NC}"
 
 # Function to delete VPC with robust retry mechanism
 delete_vpc_with_retries() {
@@ -1026,9 +1023,6 @@ delete_vpc_with_retries() {
     
     # First handle Lambda VPC dependencies
     handle_lambda_vpc_dependencies "$vpc_id"
-    
-    # Cleanup Lambda ENIs again to be thorough
-    cleanup_lambda_enis
     
     # 1. Terminate EC2 instances
     echo "Checking for EC2 instances..."
@@ -1064,6 +1058,7 @@ delete_vpc_with_retries() {
     fi
     
     # 3. Delete NAT Gateways
+    echo "Checking for Nat Gateways..."
     nat_gateways=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$vpc_id" --query "NatGateways[?State!='deleted'].NatGatewayId" --output text --region $AWS_REGION)
     
     if [ -n "$nat_gateways" ]; then
@@ -1099,6 +1094,7 @@ delete_vpc_with_retries() {
     done
     
     # 5. Delete VPC Endpoints
+    echo "Checking VPC Endpoints..."
     endpoints=$(aws ec2 describe-vpc-endpoints --filters "Name=vpc-id,Values=$vpc_id" --query "VpcEndpoints[].VpcEndpointId" --output text --region $AWS_REGION)
     
     if [ -n "$endpoints" ]; then
@@ -1112,6 +1108,7 @@ delete_vpc_with_retries() {
     fi
     
     # 6. Delete subnets
+    echo "Checking subnets..."
     subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
     
     if [ -n "$subnets" ]; then
@@ -1125,6 +1122,7 @@ delete_vpc_with_retries() {
     fi
     
     # 7. Delete route tables (except the main one)
+    echo "Checking route tables..."
     route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query "RouteTables[?!Associations[?Main]].RouteTableId" --output text --region $AWS_REGION)
     
     if [ -n "$route_tables" ]; then
@@ -1149,6 +1147,7 @@ delete_vpc_with_retries() {
     fi
     
     # 8. Detach and delete internet gateway
+    echo "Checking Internet Gateway..."
     igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
     
     if [ -n "$igw" ] && [ "$igw" != "None" ]; then
@@ -1166,6 +1165,7 @@ delete_vpc_with_retries() {
     fi
     
     # 9. Delete network ACLs (except default)
+    echo "Checking Network ACLs..."
     network_acls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query "NetworkAcls[?!IsDefault].NetworkAclId" --output text --region $AWS_REGION)
     
     if [ -n "$network_acls" ]; then
@@ -1291,7 +1291,9 @@ else
     echo -e "${YELLOW}No VPC found matching the project prefix.${NC}"
 fi
 
-echo -e "\n${YELLOW}Step 17: Clean up unattached ENIs${NC}"
+wait_with_message 900 "Final wait for 15 minutes before ENI/VPC deletion attempt as ENI takes some time to be available to delete..."
+
+echo -e "\n${YELLOW}Step 16: Clean up unattached ENIs${NC}"
 echo "Searching for any unattached ENIs across the account..."
 unattached_enis=$(aws ec2 describe-network-interfaces --filters "Name=status,Values=available" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
 
@@ -1351,8 +1353,6 @@ if [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]]; then
             aws ec2 delete-internet-gateway --internet-gateway-id $igw --region $AWS_REGION 2>/dev/null
         fi
         
-        # Final wait before attempting VPC deletion
-        wait_with_message 15 "Final wait before VPC deletion attempt..."
     fi
     
     # Final attempt to delete VPC
