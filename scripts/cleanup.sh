@@ -1188,40 +1188,50 @@ fi
 echo -e "\n${YELLOW}Step 17.5: Attempting final VPC deletion${NC}"
 echo "Attempting final VPC deletion..."
 if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
-    echo "Found VPC: $vpc_id. Attempting final deletion..."
-    # Check if there are any remaining dependencies
-    remaining_deps=$(aws ec2 describe-vpc-attribute --vpc-id $vpc_id --attribute enableDnsSupport --region $AWS_REGION 2>/dev/null && echo "true" || echo "false")
-    
-    if [ "$remaining_deps" = "true" ]; then
-        # Check for remaining resources
-        echo "Checking for remaining dependencies on VPC..."
-        
-        # Check for remaining subnets
-        subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query "Subnets[].SubnetId" --output text --region $AWS_REGION)
-        if [ -n "$subnets" ]; then
-            echo "Found remaining subnets. Attempting to delete them first..."
-            for subnet_id in $subnets; do
-                echo "Deleting subnet: $subnet_id"
-                aws ec2 delete-subnet --subnet-id $subnet_id --region $AWS_REGION 2>/dev/null || echo "Failed to delete subnet $subnet_id"
-            done
-        fi
-        
-        # Check for remaining internet gateways
-        igw=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[0].InternetGatewayId" --output text --region $AWS_REGION)
-        if [ -n "$igw" ] && [ "$igw" != "None" ]; then
-            echo "Found attached internet gateway. Detaching and deleting..."
-            aws ec2 detach-internet-gateway --internet-gateway-id $igw --vpc-id $vpc_id --region $AWS_REGION 2>/dev/null
-            aws ec2 delete-internet-gateway --internet-gateway-id $igw --region $AWS_REGION 2>/dev/null
-        fi
-        
-    fi
-    
-    # Final attempt to delete VPC
-    aws ec2 delete-vpc --vpc-id "$vpc_id" --region $AWS_REGION \
+    echo "Found VPC: $vpc_id. Checking and deleting dependencies..."
+
+    echo "Check and delete if subnet exist..."
+    subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query "Subnets[].SubnetId" --output text --region "$AWS_REGION")
+    for subnet_id in $subnets; do
+        echo "Deleting subnet: $subnet_id"
+        aws ec2 delete-subnet --subnet-id "$subnet_id" --region "$AWS_REGION" || echo "Failed to delete subnet $subnet_id"
+    done
+
+    echo "Detach and Delete Internet Gateways if exist..."
+    igws=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[].InternetGatewayId" --output text --region "$AWS_REGION")
+    for igw in $igws; do
+        echo "Detaching and deleting internet gateway: $igw"
+        aws ec2 detach-internet-gateway --internet-gateway-id "$igw" --vpc-id "$vpc_id" --region "$AWS_REGION" || true
+        aws ec2 delete-internet-gateway --internet-gateway-id "$igw" --region "$AWS_REGION" || true
+    done
+
+    echo "Delete NAT Gateways and release associated Elastic IPs if exist..."
+    nat_gws=$(aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=$vpc_id --query "NatGateways[].NatGatewayId" --output text --region "$AWS_REGION")
+    for natgw in $nat_gws; do
+        echo "Deleting NAT Gateway: $natgw"
+        # Get EIP Allocation ID
+        eip_alloc_ids=$(aws ec2 describe-nat-gateways --nat-gateway-ids "$natgw" --query "NatGateways[].NatGatewayAddresses[].AllocationId" --output text --region "$AWS_REGION")
+        aws ec2 delete-nat-gateway --nat-gateway-id "$natgw" --region "$AWS_REGION" || true
+        # NAT Gateway deletion takes time — wait is advised in production
+        for alloc_id in $eip_alloc_ids; do
+            echo "Releasing Elastic IP Allocation ID: $alloc_id"
+            aws ec2 release-address --allocation-id "$alloc_id" --region "$AWS_REGION" || true
+        done
+    done
+
+    echo "Delete Route Tables (except main) if exist..."
+    route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query "RouteTables[?Associations[?Main==\`false\`]].RouteTableId" --output text --region "$AWS_REGION")
+    for rt in $route_tables; do
+        echo "Deleting route table: $rt"
+        aws ec2 delete-route-table --route-table-id "$rt" --region "$AWS_REGION" || echo "Failed to delete route table $rt"
+    done
+
+    echo "Final VPC Deletion..."
+    aws ec2 delete-vpc --vpc-id "$vpc_id" --region "$AWS_REGION" \
         && echo -e "${GREEN}VPC deleted: $vpc_id${NC}" \
-        || echo -e "${YELLOW}VPC deletion failed — likely due to remaining dependencies.${NC}"
+        || echo -e "${YELLOW}VPC deletion failed — remaining dependencies likely exist.${NC}"
 else
-    echo "No VPC found with tag Name=${PREFIX}-vpc. The VPC might have been successfully deleted in earlier steps."
+    echo "No VPC found or already deleted."
 fi
 
 echo -e "\n${YELLOW}Step 18: Final verification${NC}"
