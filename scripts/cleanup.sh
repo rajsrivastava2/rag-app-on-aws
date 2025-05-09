@@ -1945,6 +1945,22 @@ else
     echo "No CloudFormation stacks found with prefix: ${PREFIX}"
 fi
 
+echo "Cleaning up leftover unattached ENIs..."
+unattached_enis=$(aws ec2 describe-network-interfaces --filters "Name=status,Values=available" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
+for eni in $unattached_enis; do
+  echo "Deleting unattached ENI: $eni"
+  aws ec2 delete-network-interface --network-interface-id $eni --region $AWS_REGION || true
+done
+
+# Now try to delete the VPC
+echo "Attempting final VPC deletion..."
+VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PREFIX}-vpc" --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
+if [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]]; then
+  aws ec2 delete-vpc --vpc-id "$VPC_ID" --region $AWS_REGION \
+    && echo -e "${GREEN}VPC deleted: $VPC_ID${NC}" \
+    || echo -e "${YELLOW}VPC deletion failed — likely due to remaining dependencies.${NC}"
+fi
+
 echo -e "\n${YELLOW}Step 17: Final verification${NC}"
 echo "Performing final verification of resource cleanup..."
 
