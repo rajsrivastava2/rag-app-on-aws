@@ -2,7 +2,7 @@
 
 **Terraform-based Infrastructure as Code (IaC)** for deploying complete AWS backend services, integrated with Google's free-tier Gemini Pro and Gemini Embedding models for AI powered document querying.
 
-Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **use the cleanup script** in the `scripts` folder once you're done.
+Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **use the cleanup script** in the `scripts` folder once you're done or use the **Manual AWS Cleanup** GitHub workflow.
 
 👉 Related UI: [rag-app-on-aws-ui](https://github.com/genieincodebottle/rag-app-on-aws-ui)  
 📺 **YouTube breakdown video coming soon...**
@@ -15,8 +15,10 @@ Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **u
 
 This repository contains the complete Terraform codebase for provisioning and managing the AWS infrastructure that powers the **RAG (Retrieval-Augmented Generation)** application.
 It includes:
-- Backend Lambda functions (upload, document processing, query handling)
+- Backend Lambda functions (upload, document processing, query handling, auth handling)
 - Unit and integration tests  
+- CI/CD workflows (deployment and cleanup)
+
 It follows **IaC best practices** for consistent deployments across `dev`, `staging`, and `production`.
 
 ---
@@ -36,16 +38,16 @@ It follows **IaC best practices** for consistent deployments across `dev`, `stag
 - VPC Endpoints
 
 #### 2. **Compute (Lambda Functions)**
-- Document Processor
-- Query Processor
-- Upload Handler
-- DB Initialization
-- Authentication Handler
+- Document Processor: Extracts text, creates embeddings
+- Query Processor: Handles user queries with vector similarity search
+- Upload Handler: Processes file uploads to S3
+- DB Initialization: Sets up PostgreSQL with pgvector
+- Authentication Handler: Manages user authentication with Cognito
 
 #### 3. **Storage**
 - S3 Buckets (Documents)
 - DynamoDB (Metadata)
-- PostgreSQL RDS with `pgvector`
+- PostgreSQL RDS with `pgvector` for vector storage
 
 #### 4. **API & Authentication**
 - API Gateway (REST)
@@ -64,10 +66,31 @@ It follows **IaC best practices** for consistent deployments across `dev`, `stag
 ```
 .
 ├── .github/workflows/       # CI/CD via GitHub Actions
+│   ├── deploy.yml           # Infrastructure deployment workflow
+│   └── manual_cleanup.yml   # Resource cleanup workflow
 ├── environments/            # Environment-specific configs (dev, staging, prod)
 ├── modules/                 # Reusable Terraform modules
+│   ├── api/                 # API Gateway configuration
+│   ├── auth/                # Cognito authentication
+│   ├── compute/             # Lambda functions
+│   ├── database/            # PostgreSQL with pgvector
+│   ├── monitoring/          # CloudWatch and alerts
+│   ├── storage/             # S3 and DynamoDB
+│   └── vpc/                 # Networking
 ├── scripts/                 # Utility shell scripts
+│   ├── cleanup.sh           # Resource cleanup 
+│   ├── import_resources.sh  # Import existing resources
+│   └── network-diagnostics.sh # Network troubleshooting
 └── src/                     # Lambda backend source code
+    ├── auth_handler/        # Authentication handler
+    ├── db_init/             # Database initialization
+    ├── document_processor/  # Document processing
+    ├── query_processor/     # Query handling
+    ├── tests/               # Unit and integration tests
+    │   ├── integration/     # Integration tests
+    │   └── unit/            # Unit tests
+    ├── upload_handler/      # File upload processing
+    └── utils/               # Utility scripts
 ```
 
 🔧 Change `project_name` in `environments/<stage>/terraform.tfvars` to deploy under a custom AWS project name.  
@@ -84,8 +107,8 @@ This avoids name conflicts (e.g., with S3 buckets).
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
   - `SONAR_TOKEN` (optional - for quality gate)
-– Google API Key (for free-tier Gemini Pro & Embedding models)
-   → [Get your API key from Google AI Studio](https://aistudio.google.com/apikey)
+- Google API Key (for free-tier Gemini Pro & Embedding models)
+   → [Get your API key from Google AI Studio](https://aistudio.google.com/apikey)
 ---
 
 ### 🚀 Deployment
@@ -124,13 +147,23 @@ terraform output cognito_app_client_id
 
 #### 🤖 Automated Deployment via GitHub Actions
 
-Push to trigger CI/CD:
+The repository includes two GitHub Actions workflows:
+
+1. **Terraform AWS Deployment** (`deploy.yml`)
+   - Deploys the infrastructure based on environment
+   - Can be triggered automatically or manually
+
+2. **Manual AWS Cleanup** (`manual_cleanup.yml`)
+   - Manually triggered workflow to clean up all AWS resources
+   - Uses the `cleanup.sh` script
+
+Push to trigger deployment CI/CD:
 
 - **Dev**: `git push origin develop`  
 - **Staging/Prod**: `git push origin main`
 
-Manually trigger from GitHub:
-- Actions → "Terraform AWS Deployment" → Run
+Manually trigger deployment from GitHub:
+- Actions → "Terraform AWS Deployment" → Run workflow
 
 ---
 
@@ -171,6 +204,12 @@ Configs live under `environments/`.
 
 To clean up resources:
 
+#### Using GitHub Actions:
+1. Go to Actions → "Manual AWS Cleanup"
+2. Click "Run workflow"
+3. Enter the environment name (dev, staging, prod)
+
+#### Using Script:
 ```bash
 cd scripts
 chmod +x cleanup.sh

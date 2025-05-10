@@ -5,8 +5,9 @@ on:
     branches:
       - main
       - develop
+      - staging
   pull_request:
-    branches: [main]
+    branches: [main, staging]
   workflow_dispatch:
     inputs:
       environment:
@@ -60,10 +61,15 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
           else
-            echo "environment=dev" >> $GITHUB_OUTPUT
+            BRANCH="${GITHUB_REF##*/}"
+            case "$BRANCH" in
+              main) ENV="prod" ;;
+              staging) ENV="staging" ;;
+              develop) ENV="dev" ;;
+              *) ENV="dev" ;;  # fallback default
+            esac
+            echo "environment=$ENV" >> $GITHUB_OUTPUT
           fi
           
           # Default to NOT resetting DB password unless explicitly triggered
