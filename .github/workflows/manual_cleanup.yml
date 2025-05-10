@@ -2,6 +2,19 @@ name: Manual AWS Cleanup
 
 on:
   workflow_dispatch:  # Triggered manually via GitHub UI
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   determine_environment:
@@ -43,7 +56,6 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     needs: [determine_environment]
-    environment: ${{ needs.determine_environment.outputs.environment }}
     env:
       PROJECT_NAME: ${{ needs.determine_environment.outputs.project_name }}
       STAGE: ${{ needs.determine_environment.outputs.environment }}
@@ -60,6 +72,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ needs.determine_environment.outputs.aws_region }}
       
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Ensure AWS CLI is available
         run: |
           aws --version || (echo "AWS CLI not found!" && exit 1)
@@ -69,3 +84,4 @@ jobs:
 
       - name: Run AWS Cleanup Script
         run: ./scripts/cleanup.sh
+        timeout-minutes: 30  # Allow more time for cleanup to complete
