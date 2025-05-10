@@ -202,7 +202,7 @@ handle_lambda_vpc_dependencies() {
     fi
 }
 
-# Function to delete vpc with retries
+# Function to delete vpc
 delete_vpc() {
     local vpc_id="$1"
     local has_dependencies=false
@@ -1159,9 +1159,9 @@ else
     echo -e "${YELLOW}No VPC found matching the project prefix.${NC}"
 fi
 
-wait_with_message 900 "Final wait for 15 minutes before ENI/VPC deletion attempt as ENI takes some time to be available to delete..."
+wait_with_message 900 "Final wait for 15 minutes to allow remaining ENIs, VPCs, and associated resources to become eligible for deletion, as some resources take time to detach and become available..."
 
-echo -e "\n${YELLOW}Step 16: Clean up unattached ENIs${NC}"
+echo -e "\n${YELLOW}Step 16: Clean up still unattached ENIs${NC}"
 echo "Searching for any unattached ENIs across the account..."
 unattached_enis=$(aws ec2 describe-network-interfaces --filters "Name=status,Values=available" --query "NetworkInterfaces[].NetworkInterfaceId" --output text --region $AWS_REGION)
 
@@ -1194,15 +1194,24 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
     subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query "Subnets[].SubnetId" --output text --region "$AWS_REGION")
     for subnet_id in $subnets; do
         echo "Deleting subnet: $subnet_id"
-        aws ec2 delete-subnet --subnet-id "$subnet_id" --region "$AWS_REGION" || echo "Failed to delete subnet $subnet_id"
+        run_command "aws ec2 delete-subnet --subnet-id $subnet_id --region $AWS_REGION" \
+                "Failed to delete subnet $subnet_id" \
+                "Successfully deleted subnet $subnet_id" \
+                "true"
     done
 
     echo "Detach and Delete Internet Gateways if exist..."
     igws=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query "InternetGateways[].InternetGatewayId" --output text --region "$AWS_REGION")
     for igw in $igws; do
         echo "Detaching and deleting internet gateway: $igw"
-        aws ec2 detach-internet-gateway --internet-gateway-id "$igw" --vpc-id "$vpc_id" --region "$AWS_REGION" || true
-        aws ec2 delete-internet-gateway --internet-gateway-id "$igw" --region "$AWS_REGION" || true
+        run_command "aws ec2 detach-internet-gateway --internet-gateway-id $igw --vpc-id $vpc_id --region $AWS_REGION" \
+                "Failed to detach Internet gateway" \
+                "Successfully detached Internet gateway " \
+                "true"
+        run_command "aws ec2 delete-internet-gateway --internet-gateway-id $igw --region $AWS_REGION" \
+                "Failed to delete Internet gateway" \
+                "Successfully delete Internet gateway " \
+                "true"
     done
 
     echo "Delete NAT Gateways and release associated Elastic IPs if exist..."
@@ -1211,11 +1220,17 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
         echo "Deleting NAT Gateway: $natgw"
         # Get EIP Allocation ID
         eip_alloc_ids=$(aws ec2 describe-nat-gateways --nat-gateway-ids "$natgw" --query "NatGateways[].NatGatewayAddresses[].AllocationId" --output text --region "$AWS_REGION")
-        aws ec2 delete-nat-gateway --nat-gateway-id "$natgw" --region "$AWS_REGION" || true
+        run_command "aws ec2 delete-nat-gateway --nat-gateway-id $natgw --region $AWS_REGION" \
+            "Failed to delete NAT gateway" \
+            "Successfully delete NAT gateway " \
+            "true"
         # NAT Gateway deletion takes time — wait is advised in production
         for alloc_id in $eip_alloc_ids; do
             echo "Releasing Elastic IP Allocation ID: $alloc_id"
-            aws ec2 release-address --allocation-id "$alloc_id" --region "$AWS_REGION" || true
+            run_command "aws ec2 release-address --allocation-id $alloc_id --region $AWS_REGION" \
+                "Failed to delete NAT gateway" \
+                "Successfully delete NAT gateway" \
+                "true"
         done
     done
 
@@ -1223,7 +1238,10 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
     route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query "RouteTables[?Associations[?Main==\`false\`]].RouteTableId" --output text --region "$AWS_REGION")
     for rt in $route_tables; do
         echo "Deleting route table: $rt"
-        aws ec2 delete-route-table --route-table-id "$rt" --region "$AWS_REGION" || echo "Failed to delete route table $rt"
+        run_command "aws ec2 delete-route-table --route-table-id $rt --region $AWS_REGION" \
+            "Failed to delete route table $rt" \
+            "Successfully deleted route table $rt" \
+            "true"
     done
 
     echo "Release Elastic IPs matching name prefix if exist..."
@@ -1233,7 +1251,10 @@ if [[ "$vpc_id" != "None" && -n "$vpc_id" ]]; then
 
     for alloc_id in $eips_to_release; do
         echo "Releasing Elastic IP with Allocation ID: $alloc_id"
-        aws ec2 release-address --allocation-id "$alloc_id" --region "$AWS_REGION" || echo "Failed to release EIP $alloc_id"
+        run_command "aws ec2 release-address --allocation-id $alloc_id --region $AWS_REGION" \
+            "Failed to release EIP $alloc_id" \
+            "Successfully released EIP $alloc_id" \
+            "true"
     done
 
     echo "Delete Security Groups if exist..."
