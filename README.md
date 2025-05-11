@@ -4,7 +4,7 @@
 
 Estimated cost: ~$3 (~₹250) without the free tier. To avoid extra charges, **use the cleanup script** in the `scripts` folder once you're done or use the **Manual AWS Cleanup** GitHub workflow.
 
-👉 Related UI: [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui/rag_ui)  
+👉 Related UI: [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws/tree/main/rag_ui)  
 📺 **YouTube breakdown video coming soon...**
 
 ![pipeline](./images/pipeline.png)
@@ -220,7 +220,7 @@ chmod +x cleanup.sh
 
 ### 🌐 Related UI
 
-- [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws-ui/rag_ui) – Streamlit frontend powered by this infra
+- [RAG UI](https://github.com/genieincodebottle/rag-app-on-aws/tree/main/rag_ui) – Streamlit frontend powered by this infra
 
 ---
 
