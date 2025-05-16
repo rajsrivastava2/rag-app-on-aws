@@ -357,6 +357,10 @@ jobs:
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: terraform apply -auto-approve tfplan
       
+      - name: Refresh Terraform State
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: terraform refresh
+
       - name: Save Terraform Outputs to .env file
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
