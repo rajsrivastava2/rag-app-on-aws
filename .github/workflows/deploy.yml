@@ -365,31 +365,19 @@ jobs:
             # Wait a moment to ensure state is consistent
             sleep 2
             
-            # Try direct output extraction first
-            echo "Trying to extract outputs directly..."
-            
-            # Use simple grep and sed for extraction - no JSON parsing
-            terraform show > show_output.txt
-            
-            COGNITO_CLIENT_ID=$(grep -m1 "cognito_app_client_id" show_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-            API_ENDPOINT=$(grep -m1 "api_endpoint" show_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-            
-            # If not found, extract from apply output
-            if [ -z "$COGNITO_CLIENT_ID" ] || [ -z "$API_ENDPOINT" ]; then
-              echo "Extracting from apply output..."
-              COGNITO_CLIENT_ID=$(grep -m1 "cognito_app_client_id" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-              API_ENDPOINT=$(grep -m1 "api_endpoint" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-            fi
+            echo "Extracting from apply output..."
+            COGNITO_CLIENT_ID=$(grep -m1 "cognito_app_client_id" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
+            API_ENDPOINT=$(grep -m1 "api_endpoint" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
             
             echo "Extracted COGNITO_CLIENT_ID: $COGNITO_CLIENT_ID"
             echo "Extracted API_ENDPOINT: $API_ENDPOINT"
             
-            # Also create a copy in the root directory for the artifact upload
+            # Create a copy in the root directory for the artifact upload
             echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > ../../env_vars.env
             echo "API_ENDPOINT=$API_ENDPOINT" >> ../../env_vars.env
 
             # Also set them as environment variables for the current job
-            echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_ENV
+            echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
 
       - name: Upload UI Env File as Artifact
         uses: actions/upload-artifact@v4
