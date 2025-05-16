@@ -355,8 +355,9 @@ jobs:
 
       - name: Terraform Apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
-        run: terraform apply -auto-approve \
-            -var="reset_db_password=${{ env.RESET_DB_PASSWORD }}" \
+        run: |
+          terraform apply -auto-approve \
+            -var="reset_db_password=${{ needs.determine_environment.outputs.reset_db_password }}" \
             -var="enable_lifecycle_rules=${{ needs.determine_environment.outputs.enable_lifecycle_rules }}" \
             -var="bastion_allowed_cidr=[\"${{ needs.determine_environment.outputs.bastion_allowed_cidr }}\"]"
       
