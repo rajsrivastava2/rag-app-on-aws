@@ -245,18 +245,15 @@ if [ -n "$DB_SECRET_ARN" ] && [ "$DB_SECRET_ARN" != "None" ]; then
   echo -e "${GREEN}Secret exists (${DB_SECRET_ARN}), checking state...${NC}"
   safe_import "module.database.aws_secretsmanager_secret.db_credentials" "${DB_SECRET_ARN}"
   
-  # Import secret version if exists (only if secret import was successful)
-  if [ $? -eq 0 ]; then
-    CURRENT_VERSION=$(aws secretsmanager describe-secret --secret-id ${DB_SECRET_ARN} --query "VersionIdsToStages" --output text --region "${REGION}" | grep AWSCURRENT | awk '{print $1}')
-    
-    if [ -n "$CURRENT_VERSION" ]; then
-      echo -e "${YELLOW}Importing secret version...${NC}"
-      # First remove it from state if it exists to avoid conflicts
-      if check_state "module.database.aws_secretsmanager_secret_version.db_credentials"; then
-        terraform state rm module.database.aws_secretsmanager_secret_version.db_credentials
-      fi
-      safe_import "module.database.aws_secretsmanager_secret_version.db_credentials" "${DB_SECRET_ARN}|${CURRENT_VERSION}"
-    fi
+  # We'll handle secret versions differently - instead of trying to import them
+  # we'll check if the version resource exists in the state and skip the import
+  # This is because importing secret versions can be problematic
+  echo -e "${YELLOW}Note: Secret version will be managed by Terraform on next apply${NC}"
+  if check_state "module.database.aws_secretsmanager_secret_version.db_credentials"; then
+    echo -e "${GREEN}Secret version already in state.${NC}"
+  else
+    echo -e "${YELLOW}Secret version not in state. It will be created on next apply.${NC}"
+    # No import attempt for secret version
   fi
 else
   echo -e "${YELLOW}Secret doesn't exist, will be created by Terraform${NC}"
@@ -271,18 +268,13 @@ if [ -n "$GEMINI_SECRET_ARN" ] && [ "$GEMINI_SECRET_ARN" != "None" ]; then
   echo -e "${GREEN}Secret exists (${GEMINI_SECRET_ARN}), checking state...${NC}"
   safe_import "module.compute.aws_secretsmanager_secret.gemini_api_credentials" "${GEMINI_SECRET_ARN}"
   
-  # Import secret version if exists (only if secret import was successful)
-  if [ $? -eq 0 ]; then
-    CURRENT_VERSION=$(aws secretsmanager describe-secret --secret-id ${GEMINI_SECRET_ARN} --query "VersionIdsToStages" --output text --region "${REGION}" | grep AWSCURRENT | awk '{print $1}')
-    
-    if [ -n "$CURRENT_VERSION" ]; then
-      echo -e "${YELLOW}Importing secret version...${NC}"
-      # First remove it from state if it exists to avoid conflicts
-      if check_state "module.compute.aws_secretsmanager_secret_version.gemini_api_credentials"; then
-        terraform state rm module.compute.aws_secretsmanager_secret_version.gemini_api_credentials
-      fi
-      safe_import "module.compute.aws_secretsmanager_secret_version.gemini_api_credentials" "${GEMINI_SECRET_ARN}|${CURRENT_VERSION}"
-    fi
+  # Same approach for this secret version
+  echo -e "${YELLOW}Note: Secret version will be managed by Terraform on next apply${NC}"
+  if check_state "module.compute.aws_secretsmanager_secret_version.gemini_api_credentials"; then
+    echo -e "${GREEN}Secret version already in state.${NC}"
+  else
+    echo -e "${YELLOW}Secret version not in state. It will be created on next apply.${NC}"
+    # No import attempt for secret version
   fi
 else
   echo -e "${YELLOW}Secret doesn't exist, will be created by Terraform${NC}"

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Configuration from environment variables or defaults
-DEFAULT_API_BASE = os.getenv("API_BASE_URL")
+DEFAULT_API_BASE = os.getenv("API_ENDPOINT")
 API_ENDPOINTS = {
     "base_url": DEFAULT_API_BASE,
     "upload": os.getenv("UPLOAD_ENDPOINT", "/upload"),
