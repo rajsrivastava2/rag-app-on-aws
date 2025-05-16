@@ -384,12 +384,12 @@ jobs:
             echo "Extracted COGNITO_CLIENT_ID: $COGNITO_CLIENT_ID"
             echo "Extracted API_ENDPOINT: $API_ENDPOINT"
             
-            # Create environment file
-            echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > env_vars.env
-            echo "API_ENDPOINT=$API_ENDPOINT" >> env_vars.env
+            # Also create a copy in the root directory for the artifact upload
+            echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > ../../env_vars.env
+            echo "API_ENDPOINT=$API_ENDPOINT" >> ../../env_vars.env
 
             # Also set them as environment variables for the current job
-            echo "API_ENDPOINT=$API_ENDPOINT" >> $GITHUB_ENV
+            echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_ENV
 
       - name: Upload UI Env File as Artifact
         uses: actions/upload-artifact@v4
