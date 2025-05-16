@@ -358,8 +358,8 @@ jobs:
         run: |
           terraform apply -auto-approve tfplan
 
-          # Then run a plain terraform apply with -refresh-only to update the state
-          terraform apply -refresh-only -auto-approve
+          # Then run a plain terraform apply with -refresh-only to update the state of specifc module where output needed
+          terraform apply -refresh-only -auto-approve -target=module.auth -target=module.api
       
       - name: Save Terraform Outputs to .env file
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
