@@ -359,18 +359,25 @@ jobs:
         id: terraform-apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
-          terraform apply -auto-approve tfplan | tee apply_output.txt
-    
-          # Extract outputs directly from the terminal output
-          COGNITO_APP_CLIENT_ID=$(grep "cognito_app_client_id" apply_output.txt | cut -d "=" -f2 | xargs)
-          API_ENDPOINT=$(grep "api_endpoint" apply_output.txt | cut -d "=" -f2 | xargs)
-          
-          echo "COGNITO_CLIENT_ID=$COGNITO_APP_CLIENT_ID" >> env_vars.env
-          echo "API_ENDPOINT=$API_ENDPOINT" >> env_vars.env
-          
-          # Also set API_ENDPOINT as outputs for this step (Used in Integration Test stage)
-          echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+          terraform apply -auto-approve tfplan 
 
+      - name: Get Terraform Outputs
+        working-directory: environments/${{ needs.determine_environment.outputs.environment }}
+        run: |
+          # Export outputs to a structured format
+          terraform output -json > terraform_outputs.json
+          
+          # Parse with jq for reliability
+          COGNITO_CLIENT_ID=$(jq -r '.cognito_app_client_id.value' terraform_outputs.json)
+          API_ENDPOINT=$(jq -r '.api_endpoint.value' terraform_outputs.json)
+          
+          # Create environment file
+          echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > env_vars.env
+          echo "API_ENDPOINT=$API_ENDPOINT" >> env_vars.env
+
+          # Also set them as environment variables for the current job
+          echo "API_ENDPOINT=$API_ENDPOINT" >> $GITHUB_ENV
+          
       - name: Upload UI Env File as Artifact
         uses: actions/upload-artifact@v4
         with:
