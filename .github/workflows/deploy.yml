@@ -355,7 +355,7 @@ jobs:
 
       - name: Terraform Apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve
       
       - name: Save Terraform Outputs to .env file
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
