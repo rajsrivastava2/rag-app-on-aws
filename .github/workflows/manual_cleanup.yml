@@ -4,7 +4,7 @@ on:
   workflow_dispatch:  # Triggered manually via GitHub UI
     inputs:
       environment:
-        description: 'Environment to deploy to'
+        description: 'Environment to clean resources'
         required: true
         default: 'dev'
         type: choice

@@ -356,6 +356,17 @@ jobs:
       - name: Terraform Apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: terraform apply -auto-approve tfplan
+      
+      - name: Save Terraform Outputs to .env file
+        run: |
+          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id)" >> env_vars.env
+          echo "API_BASE_URL=$(terraform output -raw api_endpoint)" >> env_vars.env
+      
+      - name: Upload UI Env File as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-env-vars
+          path: env_vars.env
 
       - name: Wait for RDS instance to be available
         if: ${{ needs.determine_environment.outputs.wait_for_db == 'true' }}
