@@ -226,6 +226,28 @@ else
   echo -e "${YELLOW}DB Parameter Group does not exist. Terraform will create it.${NC}"
 fi
 
+
+# ----------------------------------------
+# RDS Subnet Group
+# ----------------------------------------
+
+DB_SUBNET_GROUP="${PROJECT_NAME}-${STAGE}-db-subnet-group"
+
+echo -e "${YELLOW}Checking RDS Subnet Group: ${DB_SUBNET_GROUP}${NC}"
+if aws rds describe-db-subnet-groups --db-subnet-group-name "${DB_SUBNET_GROUP}" --region "${REGION}" 2>/dev/null; then
+  echo -e "${GREEN}Subnet group exists, checking state...${NC}"
+  
+  if check_state "module.vpc.aws_db_subnet_group.main"; then
+    echo -e "${GREEN}Subnet group already in state.${NC}"
+  else
+    echo -e "${YELLOW}Importing RDS subnet group...${NC}"
+    terraform import "module.vpc.aws_db_subnet_group.main" "${DB_SUBNET_GROUP}"
+  fi
+else
+  echo -e "${YELLOW}Subnet group doesn't exist, will be created by Terraform${NC}"
+fi
+
+
 echo -e "${YELLOW}Checking RDS instance: ${DB_IDENTIFIER}${NC}"
 DB_EXISTS=$(aws rds describe-db-instances --db-instance-identifier "${DB_IDENTIFIER}" --query "DBInstances[0].DBInstanceIdentifier" --output text --region "${REGION}" 2>/dev/null)
 
@@ -360,6 +382,28 @@ if aws iam get-role --role-name "${ROLE_NAME}" 2>/dev/null; then
 else
   echo -e "${YELLOW}Role doesn't exist, will be created by Terraform${NC}"
 fi
+
+
+# ----------------------------------------
+# IAM Role - Flow Logs
+# ----------------------------------------
+
+FLOW_LOG_ROLE="${PROJECT_NAME}-${STAGE}-flow-logs-role"
+
+echo -e "${YELLOW}Checking IAM role: ${FLOW_LOG_ROLE}${NC}"
+if aws iam get-role --role-name "${FLOW_LOG_ROLE}" 2>/dev/null; then
+  echo -e "${GREEN}Flow logs role exists, checking state...${NC}"
+  
+  if check_state "module.vpc.aws_iam_role.flow_logs"; then
+    echo -e "${GREEN}Flow logs role already in state.${NC}"
+  else
+    echo -e "${YELLOW}Importing flow logs role...${NC}"
+    terraform import "module.vpc.aws_iam_role.flow_logs" "${FLOW_LOG_ROLE}"
+  fi
+else
+  echo -e "${YELLOW}Flow logs role doesn't exist, will be created by Terraform${NC}"
+fi
+
 
 # ----------------------------------------
 # IAM Policy
@@ -642,6 +686,28 @@ if [ -n "$API_ID" ]; then
 else
   echo -e "${YELLOW}API Gateway doesn't exist, Auth resources will be created by Terraform${NC}"
 fi
+
+
+# ----------------------------------------
+# NAT Gateway Elastic IP
+# ----------------------------------------
+
+echo -e "${YELLOW}Checking for existing NAT EIP${NC}"
+NAT_EIP_ALLOC_ID=$(aws ec2 describe-addresses --query "Addresses[?Tags[?Key=='Name' && Value=='${PROJECT_NAME}-${STAGE}-nat-eip']].AllocationId" --output text --region "${REGION}" 2>/dev/null)
+
+if [ -n "$NAT_EIP_ALLOC_ID" ]; then
+  echo -e "${GREEN}EIP exists (${NAT_EIP_ALLOC_ID}), checking state...${NC}"
+  
+  if check_state "module.vpc.aws_eip.nat[0]"; then
+    echo -e "${GREEN}EIP already in state.${NC}"
+  else
+    echo -e "${YELLOW}Importing EIP...${NC}"
+    terraform import "module.vpc.aws_eip.nat[0]" "${NAT_EIP_ALLOC_ID}"
+  fi
+else
+  echo -e "${YELLOW}EIP not found, will be created by Terraform${NC}"
+fi
+
 
 # ----------------------------------------
 # Lambda Permissions for Auth Handler
