@@ -355,19 +355,20 @@ jobs:
 
       - name: Terraform Apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve \
+            -var="reset_db_password=${{ env.RESET_DB_PASSWORD }}" \
+            -var="enable_lifecycle_rules=${{ needs.determine_environment.outputs.enable_lifecycle_rules }}" \
+            -var="bastion_allowed_cidr=[\"${{ needs.determine_environment.outputs.bastion_allowed_cidr }}\"]"
       
       - name: Save Terraform Outputs to .env file
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
-          terraform refresh -input=false
           echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id)" >> env_vars.env
           echo "API_ENDPOINT=$(terraform output -raw api_endpoint)" >> env_vars.env
       
       - name: Echo Terraform Outputs
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
-          terraform refresh -input=false
           echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id)"
           echo "API_ENDPOINT=$(terraform output -raw api_endpoint)"
 
@@ -558,8 +559,6 @@ jobs:
         id: get-api
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
-          terraform refresh -input=false
-          
           # Try to get API endpoint from Terraform output
           cd environments/$STAGE
           API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
