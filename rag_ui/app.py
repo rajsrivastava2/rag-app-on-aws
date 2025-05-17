@@ -1069,7 +1069,8 @@ def main():
             with tab1:
                 # Display the AI-generated response
                 if "response" in result:
-                    st.markdown(result["response"])
+                    response_data = json.loads(result["response"])
+                    st.markdown(response_data.get("answer", "No answer found."))
                 else:
                     st.info("No AI-generated response available.")
             
