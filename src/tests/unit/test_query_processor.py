@@ -269,7 +269,8 @@ class TestQueryProcessor(unittest.TestCase):
         # Create an event with missing query
         event = {
             "body": json.dumps({
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 
@@ -310,7 +311,8 @@ class TestQueryProcessor(unittest.TestCase):
         event = {
             "body": json.dumps({
                 "query": "What is RAG?",
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 
@@ -321,6 +323,7 @@ class TestQueryProcessor(unittest.TestCase):
         self.assertEqual(response["statusCode"], 200)
         response_body = json.loads(response["body"])
         self.assertEqual(response_body["query"], "What is RAG?")
+        self.assertEqual(response_body["model_name"], "gemini-2.0-flash")
         self.assertEqual(response_body["response"], "RAG stands for Retrieval-Augmented Generation. It combines retrieval and generation techniques.")
         self.assertEqual(len(response_body["results"]), 1)
         self.assertEqual(response_body["count"], 1)
@@ -340,7 +343,8 @@ class TestQueryProcessor(unittest.TestCase):
         event = {
             "body": json.dumps({
                 "query": "What is RAG?",
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 
