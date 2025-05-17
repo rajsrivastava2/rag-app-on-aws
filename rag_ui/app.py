@@ -894,7 +894,7 @@ def create_evaluation_chart(eval_results):
 # Define sidebar
 def render_sidebar():
     st.sidebar.title("📚 App Navigation")
-
+    selected_model =""
     # Determine current page
     if st.session_state.get("authenticated", False):
         with st.sidebar.expander("⚙️ API Settings", expanded=False):

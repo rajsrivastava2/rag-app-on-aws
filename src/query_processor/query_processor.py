@@ -420,13 +420,13 @@ def handler(event, context):
                 contexts=relevant_chunks,
                 ground_truth=ground_truth
             )
-
+        response_data = json.loads(response)
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({
                 'query': query,
-                'response': response,
+                'response': response_data.get("answer", "No answer found."),
                 'results': relevant_chunks,
                 'count': len(relevant_chunks),
                 'evaluation': evaluation_results
