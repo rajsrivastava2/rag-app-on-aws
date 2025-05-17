@@ -12,12 +12,12 @@ os.environ["METADATA_TABLE"] = "test-table"
 os.environ["STAGE"] = "test"
 os.environ["DB_SECRET_ARN"] = "test-db-secret"
 os.environ["GEMINI_SECRET_ARN"] = "test-gemini-secret"
-os.environ["GEMINI_MODEL"] = "test-gemini-model"
 os.environ["GEMINI_EMBEDDING_MODEL"] = "test-embedding-model"
 os.environ["TEMPERATURE"] = "0.2"
 os.environ["MAX_OUTPUT_TOKENS"] = "1024"
 os.environ["TOP_K"] = "40"
 os.environ["TOP_P"] = "0.8"
+MODEL_NAME = "gemini-2.0-flash"
 
 # Now import the module under test - mocks are already in place globally from conftest
 from query_processor.query_processor import (
@@ -43,7 +43,7 @@ class TestQueryProcessor(unittest.TestCase):
         # Clean up environment variables
         for key in [
             "DOCUMENTS_BUCKET", "METADATA_TABLE", "STAGE", "DB_SECRET_ARN",
-            "GEMINI_SECRET_ARN", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", 
+            "GEMINI_SECRET_ARN", "GEMINI_EMBEDDING_MODEL", 
             "TEMPERATURE", "MAX_OUTPUT_TOKENS", "TOP_K", "TOP_P"
         ]:
             if key in os.environ:
@@ -222,7 +222,7 @@ class TestQueryProcessor(unittest.TestCase):
         ]
         
         # Call the function
-        response = generate_response(query, relevant_chunks)
+        response = generate_response(MODEL_NAME, query, relevant_chunks)
         
         # Verify results
         self.assertEqual(response, "This is the generated response.")
@@ -269,7 +269,8 @@ class TestQueryProcessor(unittest.TestCase):
         # Create an event with missing query
         event = {
             "body": json.dumps({
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 
@@ -310,7 +311,8 @@ class TestQueryProcessor(unittest.TestCase):
         event = {
             "body": json.dumps({
                 "query": "What is RAG?",
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 
@@ -328,7 +330,7 @@ class TestQueryProcessor(unittest.TestCase):
         # Verify function calls
         mock_embed.assert_called_once_with("What is RAG?")
         mock_search.assert_called_once_with([0.1, 0.2, 0.3], "user-1")
-        mock_generate.assert_called_once_with("What is RAG?", mock_chunks)
+        mock_generate.assert_called_once_with("gemini-2.0-flash", "What is RAG?", mock_chunks)
 
     @patch("query_processor.query_processor.embed_query")
     def test_handler_error_handling(self, mock_embed):
@@ -340,7 +342,8 @@ class TestQueryProcessor(unittest.TestCase):
         event = {
             "body": json.dumps({
                 "query": "What is RAG?",
-                "user_id": "user-1"
+                "user_id": "user-1",
+                "model_name": "gemini-2.0-flash"
             })
         }
 

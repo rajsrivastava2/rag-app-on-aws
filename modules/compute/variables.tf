@@ -79,12 +79,6 @@ variable "lambda_code_bucket" {
 # -------------------------
 # Gemini Configuration
 # -------------------------
-variable "gemini_model" {
-  description = "Gemini AI model to use"
-  type        = string
-  default     = "gemini-2.0-pro-exp-02-05"
-}
-
 variable "gemini_embedding_model" {
   description = "Gemini Embedding model to use"
   type        = string
