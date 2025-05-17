@@ -330,7 +330,7 @@ class TestQueryProcessor(unittest.TestCase):
         # Verify function calls
         mock_embed.assert_called_once_with("What is RAG?")
         mock_search.assert_called_once_with([0.1, 0.2, 0.3], "user-1")
-        mock_generate.assert_called_once_with("What is RAG?", mock_chunks)
+        mock_generate.assert_called_once_with("gemini-2.0-flash", "What is RAG?", mock_chunks)
 
     @patch("query_processor.query_processor.embed_query")
     def test_handler_error_handling(self, mock_embed):
