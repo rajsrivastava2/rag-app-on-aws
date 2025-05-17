@@ -17,6 +17,7 @@ os.environ["TEMPERATURE"] = "0.2"
 os.environ["MAX_OUTPUT_TOKENS"] = "1024"
 os.environ["TOP_K"] = "40"
 os.environ["TOP_P"] = "0.8"
+MODEL_NAME = "gemini-2.0-flash"
 
 # Now import the module under test - mocks are already in place globally from conftest
 from query_processor.query_processor import (
@@ -221,7 +222,7 @@ class TestQueryProcessor(unittest.TestCase):
         ]
         
         # Call the function
-        response = generate_response(query, relevant_chunks)
+        response = generate_response(MODEL_NAME, query, relevant_chunks)
         
         # Verify results
         self.assertEqual(response, "This is the generated response.")
