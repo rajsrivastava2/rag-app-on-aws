@@ -43,6 +43,7 @@ MAX_OUTPUT_TOKENS = int(os.environ.get('MAX_OUTPUT_TOKENS'))
 TOP_K = int(os.environ.get('TOP_K'))
 TOP_P = float(os.environ.get('TOP_P'))
 SIMILARITY_THRESHOLD = float(os.environ.get('SIMILARITY_THRESHOLD'))
+GEMINI_EMBEDDING_MODEL = "text-embedding-004"
 
 
 def get_gemini_api_key():

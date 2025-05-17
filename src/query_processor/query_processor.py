@@ -27,13 +27,13 @@ METADATA_TABLE = os.environ.get('METADATA_TABLE')
 STAGE = os.environ.get('STAGE')
 DB_SECRET_ARN = os.environ.get('DB_SECRET_ARN')
 GEMINI_SECRET_ARN = os.environ.get('GEMINI_SECRET_ARN')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL')
 GEMINI_EMBEDDING_MODEL = os.environ.get('GEMINI_EMBEDDING_MODEL')
 TEMPERATURE = float(os.environ.get('TEMPERATURE'))
 MAX_OUTPUT_TOKENS = int(os.environ.get('MAX_OUTPUT_TOKENS'))
 TOP_K = int(os.environ.get('TOP_K'))
 TOP_P = float(os.environ.get('TOP_P'))
 ENABLE_EVALUATION = os.environ.get('ENABLE_EVALUATION', 'true').lower() == 'true'
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # Get Gemini API key from Secrets Manager
 def get_gemini_api_key():
@@ -152,7 +152,7 @@ def similarity_search(query_embedding: List[float], user_id: str, limit: int = 5
 
 
 # Generate a response from Gemini using relevant context
-def generate_response(query: str, relevant_chunks: List[Dict[str, Any]]) -> str:
+def generate_response(model_name: str, query: str, relevant_chunks: List[Dict[str, Any]]) -> str:
     context = "\n\n".join([f"Document: {c['file_name']}\nContent: {c['content']}" for c in relevant_chunks])
     prompt = f"""
     Answer the following question based on the provided context.
@@ -174,7 +174,7 @@ def generate_response(query: str, relevant_chunks: List[Dict[str, Any]]) -> str:
             response_mime_type='application/json'
         )
         result = client.models.generate_content(
-            model=GEMINI_MODEL,
+            model=model_name,
             contents=prompt,
             config=config
         )
@@ -187,8 +187,9 @@ def generate_response(query: str, relevant_chunks: List[Dict[str, Any]]) -> str:
 class GeminiRagEvaluator:
     """RAG Evaluator using Google's Gemini model"""
     
-    def __init__(self, google_api_key=None):
+    def __init__(self, model_name, google_api_key=None):
         """Initialize the evaluator with the Gemini model"""
+        self.model_name = model_name
         self.google_api_key = google_api_key
         self.client = genai.Client(api_key=self.google_api_key)
         
@@ -232,7 +233,7 @@ class GeminiRagEvaluator:
         
         try:
             response = self.client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=self.model_name,
                 contents=[prompt]
             )
             rating_text = response.text.strip()
@@ -271,7 +272,7 @@ class GeminiRagEvaluator:
         
         try:
             response = self.client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=self.model_name,
                 contents=[prompt]
             )
             rating_text = response.text.strip()
@@ -305,7 +306,7 @@ class GeminiRagEvaluator:
         
         try:
             response = self.client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=self.model_name,
                 contents=[prompt]
             )
             rating_text = response.text.strip()
@@ -327,7 +328,7 @@ class GeminiRagEvaluator:
             return 0.5
 
 # Function to evaluate the RAG response
-def evaluate_rag_response(query: str, answer: str, contexts: List[str], ground_truth: Optional[str] = None) -> Dict[str, float]:
+def evaluate_rag_response(model_name: str, query: str, answer: str, contexts: List[str], ground_truth: Optional[str] = None) -> Dict[str, float]:
     """
     Evaluate the RAG response quality using Gemini
     
@@ -348,7 +349,7 @@ def evaluate_rag_response(query: str, answer: str, contexts: List[str], ground_t
                 results["context_precision"] = 0.0
             return results
             
-        evaluator = GeminiRagEvaluator(GEMINI_API_KEY)
+        evaluator = GeminiRagEvaluator(model_name, GEMINI_API_KEY)
         return evaluator.evaluate_response(
             query=query,
             answer=answer,
@@ -396,6 +397,7 @@ def handler(event, context):
         user_id = body.get('user_id', 'system')
         ground_truth = body.get('ground_truth')
         enable_evaluation = body.get('enable_evaluation', ENABLE_EVALUATION)
+        model_name = body.get('model_name', GEMINI_MODEL)
 
         if not query:
             return {
@@ -406,12 +408,13 @@ def handler(event, context):
 
         query_embedding = embed_query(query)
         relevant_chunks = similarity_search(query_embedding, user_id)
-        response = generate_response(query, relevant_chunks)
+        response = generate_response(model_name, query, relevant_chunks)
         
         # Evaluate the response if enabled
         evaluation_results = {}
         if enable_evaluation:
             evaluation_results = evaluate_rag_response(
+                model_name,
                 query=query,
                 answer=response,
                 contexts=relevant_chunks,

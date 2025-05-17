@@ -755,7 +755,7 @@ def show_upload_history():
         st.rerun()
     
 # Function to query documents
-def query_documents(query_text, user_id, ground_truth=None, enable_evaluation=ENABLE_EVALUATION):
+def query_documents(selected_model, query_text, user_id, ground_truth=None, enable_evaluation=ENABLE_EVALUATION):
     # Ensure authentication is valid
     if not check_token_refresh():
         st.error("Your session has expired. Please log in again.")
@@ -767,7 +767,8 @@ def query_documents(query_text, user_id, ground_truth=None, enable_evaluation=EN
     payload = {
         "query": query_text, 
         "user_id": user_id,
-        "enable_evaluation": enable_evaluation
+        "enable_evaluation": enable_evaluation,
+        "model_name": selected_model
     }
     
     # Add ground truth if provided
@@ -901,6 +902,12 @@ def render_sidebar():
             if st.button("Save Settings"):
                 API_ENDPOINTS["base_url"] = new_url
                 st.success("✅ Settings saved for this session.")
+        selected_model = st.selectbox(
+            "Select Model",
+            options=["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-flash-preview-04-17"],
+            index=0,
+            help="Select the model to use"
+        )
         st.sidebar.markdown("---")
         page = st.sidebar.radio("Select an action:", ["Upload Documents", "Query Documents", "View Documents"])
         render_user_sidebar()  # Show user info
@@ -910,12 +917,12 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.caption("🔖 Version: RAG App on AWS v0.1")
 
-    return page
+    return page, selected_model
 
 # Main application logic
 def main():
     # Render sidebar and get selected page
-    page = render_sidebar()
+    page, selected_model = render_sidebar()
     
     # If not authenticated, show login page and return
     if not st.session_state.authenticated and page != "Login":
@@ -1038,6 +1045,7 @@ def main():
             else:
                 with st.spinner("Processing query..."):
                     success, result = query_documents(
+                        selected_model,
                         query, 
                         query_user_id, 
                         ground_truth=ground_truth,  # New parameter

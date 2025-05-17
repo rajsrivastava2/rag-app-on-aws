@@ -221,7 +221,6 @@ resource "aws_lambda_function" "document_processor" {
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
       GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
-      GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
       MAX_OUTPUT_TOKENS        = 1024
@@ -260,7 +259,6 @@ resource "aws_lambda_function" "query_processor" {
       STAGE                    = var.stage
       DB_SECRET_ARN            = var.db_secret_arn
       GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
-      GEMINI_MODEL             = var.gemini_model
       GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
       TEMPERATURE              = 0.2
       MAX_OUTPUT_TOKENS        = 1024
