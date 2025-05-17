@@ -7,6 +7,7 @@ import time
 import logging
 from datetime import datetime, timedelta
 import pandas as pd
+import plotly.graph_objects as go
 from dotenv import load_dotenv
 import re
 
@@ -28,7 +29,7 @@ API_ENDPOINTS = {
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "test-user")
 DEFAULT_API_KEY = os.getenv("API_KEY", "")
 COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
-
+ENABLE_EVALUATION = os.getenv("ENABLE_EVALUATION", "true").lower() == "true"
 # Set page config
 st.set_page_config(
     page_title="RAG Application",
@@ -752,10 +753,9 @@ def show_upload_history():
     if st.button("Clear Upload History", key="clear_history_upload_func"):
         st.session_state.uploaded_docs = []
         st.rerun()
-
     
 # Function to query documents
-def query_documents(query_text, user_id):
+def query_documents(query_text, user_id, ground_truth=None, enable_evaluation=ENABLE_EVALUATION):
     # Ensure authentication is valid
     if not check_token_refresh():
         st.error("Your session has expired. Please log in again.")
@@ -766,8 +766,13 @@ def query_documents(query_text, user_id):
     # Prepare the request payload
     payload = {
         "query": query_text, 
-        "user_id": user_id
+        "user_id": user_id,
+        "enable_evaluation": enable_evaluation
     }
+    
+    # Add ground truth if provided
+    if ground_truth:
+        payload["ground_truth"] = ground_truth
     
     # Send request to API Gateway
     try:
@@ -806,7 +811,8 @@ def query_documents(query_text, user_id):
             st.session_state.query_history.append({
                 "query": query_text,
                 "timestamp": timestamp,
-                "num_results": len(result.get("results", []))
+                "num_results": len(result.get("results", [])),
+                "has_evaluation": "evaluation" in result and bool(result["evaluation"])
             })
             
             return True, result
@@ -839,6 +845,50 @@ def query_documents(query_text, user_id):
     except Exception as e:
         logger.error(f"Query error: {str(e)}")
         return False, f"Error: {str(e)}"
+
+# Function to create evaluation chart
+def create_evaluation_chart(eval_results):
+    """Create a visualization for RAG evaluation metrics"""
+    # Define friendly metric names
+    metric_names = {
+        "answer_relevancy": "Answer Relevancy",
+        "faithfulness": "Faithfulness",
+        "context_precision": "Context Precision"
+    }
+    
+    # Colors for each metric
+    colors = {
+        "answer_relevancy": "#2563eb",  # Blue
+        "faithfulness": "#16a34a",      # Green
+        "context_precision": "#d97706"  # Amber
+    }
+    
+    # Prepare data for chart
+    x_values = [metric_names.get(k, k) for k in eval_results.keys()]
+    y_values = list(eval_results.values())
+    bar_colors = [colors.get(k, "#6b7280") for k in eval_results.keys()]
+    
+    # Create the bar chart
+    fig = go.Figure(data=[
+        go.Bar(
+            x=x_values,
+            y=y_values,
+            text=[f"{v:.2f}" for v in y_values],
+            textposition="auto",
+            marker_color=bar_colors
+        )
+    ])
+    
+    # Update layout
+    fig.update_layout(
+        title="RAG Evaluation Metrics",
+        xaxis_title="Metrics",
+        yaxis_title="Score (0-1)",
+        yaxis_range=[0, 1],
+        template="plotly_white"
+    )
+    
+    return fig
 
 # Define sidebar
 def render_sidebar():
@@ -931,6 +981,18 @@ def main():
     # Query Documents Page
     elif page == "Query Documents":
         st.header("Query Documents")
+
+        # Add RAG Evaluation configuration
+        eval_expander = st.expander("RAG Evaluation Settings", expanded=False)
+        with eval_expander:
+            enable_evaluation = st.toggle("Enable RAG Evaluation", value=ENABLE_EVALUATION, 
+                                        help="Evaluate the quality of RAG responses using metrics like faithfulness and relevancy")
+            
+            use_ground_truth = st.checkbox("Provide Ground Truth", value=False,
+                                        help="Add a ground truth answer to compare with the generated response")
+            
+            st.info("RAG evaluation uses Gemini to assess the quality of responses based on retrieved context.")
+    
         # Two column layout for query input
         col1, col2 = st.columns([3, 1])
         
@@ -941,6 +1003,15 @@ def main():
                 placeholder="e.g., What are the key points in the latest financial report?",
                 height=100
             )
+            
+            # Ground truth input if enabled
+            ground_truth = None
+            if use_ground_truth:
+                ground_truth = st.text_area(
+                    "Ground Truth Answer (optional):",
+                    placeholder="Enter the correct answer for evaluation purposes.",
+                    height=100
+                )
         
         with col2:
             # User ID selection
@@ -966,7 +1037,12 @@ def main():
                 st.warning("Please enter a question.")
             else:
                 with st.spinner("Processing query..."):
-                    success, result = query_documents(query, query_user_id)
+                    success, result = query_documents(
+                        query, 
+                        query_user_id, 
+                        ground_truth=ground_truth,  # New parameter
+                        enable_evaluation=enable_evaluation  # New parameter
+                    )
                     
                     # Store result in session state
                     if success:
@@ -975,9 +1051,13 @@ def main():
         # Display query results if available
         if 'last_query_result' in st.session_state:
             result = st.session_state.last_query_result
-            
+    
             # Create tabs for different views of the results
-            tab1, tab2 = st.tabs(["AI Response", "Document Details"])
+            if "evaluation" in result and result["evaluation"]:
+                tab1, tab2, tab3 = st.tabs(["AI Response", "Document Details", "Evaluation"])
+            else:
+                tab1, tab2 = st.tabs(["AI Response", "Document Details"])
+        
             with tab1:
                 # Display the AI-generated response
                 if "response" in result:
@@ -1016,7 +1096,39 @@ def main():
                                     st.info("No content available")
                 else:
                     st.info("No relevant documents found. Try a different query or upload more documents.")
-        
+            
+            if "evaluation" in result and result["evaluation"]:
+                with tab3:
+                    st.markdown("### RAG Response Evaluation")
+                    
+                    eval_results = result["evaluation"]
+                    
+                    # Display metrics
+                    metrics_cols = st.columns(len(eval_results))
+                    for i, (metric, value) in enumerate(eval_results.items()):
+                        with metrics_cols[i]:
+                            # Format metric name for display
+                            display_name = " ".join(word.capitalize() for word in metric.split("_"))
+                            st.metric(display_name, f"{value:.2f}")
+                    
+                    # Display evaluation chart
+                    chart = create_evaluation_chart(eval_results)
+                    st.plotly_chart(chart, use_container_width=True)
+                    
+                    # Explain metrics
+                    with st.expander("Understanding Evaluation Metrics"):
+                        st.markdown("""
+                        ### RAG Evaluation Metrics Explained
+                        
+                        - **Answer Relevancy (0-1)**: Measures how directly the answer addresses the question.
+                        
+                        - **Faithfulness (0-1)**: Measures how factually accurate the answer is based only on the provided context.
+                        
+                        - **Context Precision (0-1)**: When ground truth is provided, measures how well the answer aligns with the known correct answer.
+                        
+                        A higher score indicates better performance. Scores above 0.7 are generally considered good.
+                        """)
+
         # Display query history
         with st.expander("Query History", expanded=False):
             if st.session_state.query_history:
