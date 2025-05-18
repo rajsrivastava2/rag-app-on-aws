@@ -1,4 +1,4 @@
-## End-to-End RAG Infrastructure & Backend on AWS
+## End-to-End RAG App on AWS
 
 **Terraform-based Infrastructure as Code (IaC)** for deploying a complete AWS backend for Retrieval-Augmented Generation (RAG). This backend integrates with Google's free-tier Gemini Pro and Gemini Embedding models for AI-powered document querying.
 
@@ -6,6 +6,8 @@ Estimated cost: ~$3 (~₹250) to experiment without the AWS Free Tier, primarily
 
 👉 Related UI: [RAG UI (Streamlit Frontend)](https://github.com/genieincodebottle/rag-app-on-aws/tree/main/rag_ui)  
 📺 **YouTube breakdown video coming soon...**
+
+![architecture](./images/architecture.png)
 
 ![pipeline](./images/pipeline.png)
 
