@@ -7,7 +7,7 @@ Estimated cost: ~$3 (~₹250) to experiment without the AWS Free Tier, primarily
 👉 Related UI: [RAG UI (Streamlit Frontend)](https://github.com/genieincodebottle/rag-app-on-aws/tree/main/rag_ui)  
 📺 **YouTube breakdown video coming soon...**
 
----
+--- 
 
 ### 🔍 Overview
 
