@@ -122,6 +122,12 @@ The infrastructure is modularized using Terraform modules:
     -   Provides public HTTP(S) endpoints for backend Lambda functions.
     -   Routes include `/upload`, `/query`, and `/auth`.
     -   Configured with CORS for frontend integration.
+    -   Amazon API Gateway has a default timeout of 30 seconds. However, GenAI use cases may require longer processing times. To        support this, you can request an increased timeout via the AWS support form. After logging into your AWS account, use the following URL to access the form. In our case, we’ve configured the timeout to 150,000 milliseconds (2.5 minutes). Select United States (N. Virginia) as the region since it's set as the default in terraform.tfvars. If you're using a different region, choose the appropriate one accordingly. Keep all other settings unchanged.
+
+        https://us-east-1.console.aws.amazon.com/servicequotas/home/template/add 
+    
+        ![aws-quota](./images/aws-quota.png)
+
 -   **Cognito User Pools**:
     -   Manages user identities, including registration, sign-in, email verification, and password reset functionalities.
     -   Defines password policies and user attributes.
