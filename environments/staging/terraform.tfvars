@@ -9,7 +9,7 @@ lambda_timeout     = 150
 
 # GitHub repository settings
 github_repo        = "genieincodebottle/rag-app-on-aws"
-github_branch      = "main"
+github_branch      = "staging"
 
 # Monitoring
 alert_email = "rajsrivastava2@gmail.com"

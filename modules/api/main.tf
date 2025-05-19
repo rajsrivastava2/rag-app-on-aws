@@ -204,7 +204,7 @@ resource "aws_api_gateway_integration" "query" {
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${var.query_processor_arn}/invocations"
-  timeout_milliseconds    = 150000  # 3 minutes timeout
+  timeout_milliseconds    = 150000  # 2.5 minutes timeout
 }
 
 resource "aws_api_gateway_method_response" "query" {
@@ -262,7 +262,7 @@ resource "aws_api_gateway_integration" "upload" {
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${var.upload_handler_arn}/invocations"
-  timeout_milliseconds    = 150000  # 3 minutes timeout
+  timeout_milliseconds    = 150000  # 2.5 minutes timeout
 }
 
 resource "aws_api_gateway_method_response" "upload" {
