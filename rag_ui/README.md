@@ -1,6 +1,6 @@
-## Hybrid RAG Chatbot: Local UI with Cloud Backend (AWS) 
+## Hybrid RAG App: Local Streamlit UI with AWS Cloud Backend 
 
-A Streamlit-based web app for Retrieval-Augmented Generation (RAG) powered by AWS services.
+A Streamlit based web app for Retrieval Augmented Generation (RAG) powered by AWS services.
 
 ![App](./images/ui.png)
 
@@ -49,14 +49,27 @@ pip install -r requirements.txt
 Create a `.env` file:
 
 ```env
-API_BASE_URL=https://your-api-gateway-url.amazonaws.com/stage
-API_KEY=your_api_key_if_needed
-DEFAULT_USER_ID=test-user
+# RAG Application API Configuration
+API_ENDPOINT=https://your-api-gateway-url.amazonaws.com/stage
 UPLOAD_ENDPOINT=/upload
 QUERY_ENDPOINT=/query
 AUTH_ENDPOINT=/auth
+
+# Default user settings
+DEFAULT_USER_ID=test-user
+
+# Cognito Configuration
 COGNITO_CLIENT_ID=your_cognito_client_id
+
+# Enabling/disabling evaluation
+ENABLE_EVALUATION="true"
 ```
+
+Once the GitHub Action pipeline completes successfully, you can download the zipped environment variables file from the GitHub Artifact. Unzip it, open the file, and copy both API_ENDPOINT and COGNITO_CLIENT_ID into your .env file.
+
+
+![env-variable](./images/env-variable.png)
+
 
 ### 💡 Usage
 

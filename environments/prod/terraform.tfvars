@@ -18,14 +18,14 @@ alert_email = "rajsrivastava2@gmail.com"
 vpc_cidr   = "10.0.0.0/16"
 az_count   = 2
 # Added VPC settings
-single_nat_gateway  = false  # Cost saving for dev environment
-enable_flow_logs    = true  
+single_nat_gateway  = true   # Cost saving for dev environment. Change to true if needed in Prod
+enable_flow_logs    = false  # Useful prod. Change to true if needed in Prod   
 create_bastion_sg   = false  # Useful for dev environment
 bastion_allowed_cidr = ["0.0.0.0/0"]  # Restrict this in production
 
 # Storage settings
 # Added storage settings
-enable_lifecycle_rules      = true  # Only enable in prod
+enable_lifecycle_rules      = false  # Only enable to true in prod (false here for demo purpose)
 standard_ia_transition_days = 90
 glacier_transition_days     = 365
 
