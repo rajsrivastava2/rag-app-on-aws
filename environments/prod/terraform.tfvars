@@ -8,7 +8,7 @@ lambda_memory_size = 512
 lambda_timeout     = 150
 
 # GitHub repository settings
-github_repo        = "genieincodebottle/rag-app-on-aws"
+github_repo        = "rajsrivastava2/rag-app-on-aws"
 github_branch      = "main"
 
 # Monitoring

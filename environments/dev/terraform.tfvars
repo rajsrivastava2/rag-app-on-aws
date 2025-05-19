@@ -18,7 +18,7 @@ lambda_timeout     = 150
 # -------------------------
 # GitHub Repository Settings
 # -------------------------
-github_repo   = "genieincodebottle/rag-app-on-aws"
+github_repo   = "rajsrivastava2/rag-app-on-aws"
 github_branch = "develop"
 
 # -------------------------
