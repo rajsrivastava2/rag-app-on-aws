@@ -7,10 +7,6 @@ Estimated cost: ~$3 (~₹250) to experiment without the AWS Free Tier, primarily
 👉 Related UI: [RAG UI (Streamlit Frontend)](https://github.com/genieincodebottle/rag-app-on-aws/tree/main/rag_ui)  
 📺 **YouTube breakdown video coming soon...**
 
-![architecture](./images/architecture.png)
-
-![pipeline](./images/pipeline.png)
-
 ---
 
 ### 🔍 Overview
@@ -29,7 +25,38 @@ Key features include:
 
 ---
 
-### 🔁 Flow Diagram
+### 🏗️ High Level Architecture
+
+![architecture](./images/architecture.png)
+
+### 🌐 Network Flow Walkthrough (Referencing the Architecture)
+
+#### 🗂️ Document Processing Flow with Network Components:
+
+1. User uploads document → API Gateway → `upload_handler` Lambda
+2. `upload_handler` Lambda → S3 Gateway Endpoint → S3 Bucket
+3. S3 Event → `document_processor` Lambda (in private subnet)
+4. `document_processor` Lambda → NAT Gateway → Internet Gateway → Gemini API (for embeddings)
+5. `document_processor` Lambda → RDS Security Group → PostgreSQL Database (stores chunks/vectors)
+
+#### 💬 Query Processing Flow with Network Components:
+
+1. User submits query → API Gateway → `query_processor` Lambda (in private subnet)
+2. `query_processor` Lambda → RDS Security Group → PostgreSQL Database (vector search)
+3. `query_processor` Lambda → NAT Gateway → Internet Gateway → Gemini API (for answer generation)
+4. `query_processor` Lambda → API Gateway → User (returns answer)
+
+This network architecture ensures that sensitive operations and data are processed in a secure environment, while still allowing the necessary external communications through controlled channels.
+
+---
+
+### 🔁 GitHub Action Pipeline
+
+![pipeline](./images/pipeline.png)
+
+---
+
+### 🔁 AWS Infra Provisioning Flow Diagram
 
 🗺️ [Infra Provisioning Lifecycle Flow](https://github.com/genieincodebottle/rag-app-on-aws/blob/main/images/infra_provisioning_sequence.png) (Illustrates the Terraform provisioning sequence)
 
